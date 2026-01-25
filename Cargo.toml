@@ -138,6 +138,7 @@ members = [
     "xdp",
     "xdp-ebpf",
     "zk-token-sdk",
+    "runner",
 ]
 
 exclude = [
