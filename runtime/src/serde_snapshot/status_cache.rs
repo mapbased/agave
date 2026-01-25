@@ -374,7 +374,7 @@ impl From<SerdeInstructionError> for InstructionError {
             SerdeInstructionError::DuplicateAccountIndex => Self::DuplicateAccountIndex,
             SerdeInstructionError::ExecutableModified => Self::ExecutableModified,
             SerdeInstructionError::RentEpochModified => Self::RentEpochModified,
-            SerdeInstructionError::NotEnoughAccountKeys => Self::NotEnoughAccountKeys,
+            SerdeInstructionError::NotEnoughAccountKeys => Self::MissingAccount,
             SerdeInstructionError::AccountDataSizeChanged => Self::AccountDataSizeChanged,
             SerdeInstructionError::AccountNotExecutable => Self::AccountNotExecutable,
             SerdeInstructionError::AccountBorrowFailed => Self::AccountBorrowFailed,
@@ -445,7 +445,8 @@ impl From<InstructionError> for SerdeInstructionError {
             InstructionError::DuplicateAccountIndex => Self::DuplicateAccountIndex,
             InstructionError::ExecutableModified => Self::ExecutableModified,
             InstructionError::RentEpochModified => Self::RentEpochModified,
-            InstructionError::NotEnoughAccountKeys => Self::NotEnoughAccountKeys,
+            #[allow(deprecated)]
+            InstructionError::NotEnoughAccountKeys => Self::MissingAccount,
             InstructionError::AccountDataSizeChanged => Self::AccountDataSizeChanged,
             InstructionError::AccountNotExecutable => Self::AccountNotExecutable,
             InstructionError::AccountBorrowFailed => Self::AccountBorrowFailed,
