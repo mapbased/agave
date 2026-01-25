@@ -6342,6 +6342,7 @@ dependencies = [
  "bincode",
  "crossbeam-channel",
  "env_logger",
+ "flate2",
  "libc 0.2.177",
  "log",
  "modular-bitfield",
@@ -6357,12 +6358,18 @@ dependencies = [
  "solana-perf",
  "solana-program-runtime",
  "solana-pubkey",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-runtime",
  "solana-streamer",
  "solana-svm",
  "solana-svm-callback",
  "solana-transaction",
+ "solana-transaction-error",
+ "tar",
  "tokio",
+ "ureq",
+ "zstd",
 ]
 
 [[package]]
@@ -6454,6 +6461,7 @@ version = "0.23.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a9586e9ee2b4f8fab52a0048ca7334d7024eef48e2cb9407e3497bb7cab7fa7"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -13437,6 +13445,22 @@ name = "unwrap_none"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "461d0c5956fcc728ecc03a3a961e4adc9a7975d86f6f8371389a289517c02ca9"
+
+[[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls 0.23.34",
+ "rustls-pki-types",
+ "url 2.5.7",
+ "webpki-roots 0.26.8",
+]
 
 [[package]]
 name = "uriparse"
