@@ -251,6 +251,9 @@ impl Drop for AppendVec {
 }
 
 impl AppendVec {
+    pub fn set_not_drop(&self){
+        self.remove_file_on_drop.store(false, Ordering::Release);
+    }
     pub fn new(
         file: impl Into<PathBuf>,
         create: bool,
