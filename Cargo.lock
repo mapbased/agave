@@ -6378,6 +6378,7 @@ dependencies = [
  "tar",
  "tokio",
  "ureq",
+ "wincode",
  "zstd",
 ]
 
