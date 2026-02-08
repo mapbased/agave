@@ -6346,6 +6346,7 @@ dependencies = [
  "flate2",
  "libc 0.2.177",
  "log",
+ "lz4",
  "modular-bitfield",
  "rand 0.8.5",
  "serde",
