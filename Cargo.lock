@@ -6351,6 +6351,7 @@ dependencies = [
  "rand 0.8.5",
  "rayon",
  "serde",
+ "smallvec",
  "solana-account",
  "solana-accounts-db",
  "solana-address 1.1.0",
