@@ -6349,6 +6349,7 @@ dependencies = [
  "lz4",
  "modular-bitfield",
  "rand 0.8.5",
+ "rayon",
  "serde",
  "solana-account",
  "solana-accounts-db",
