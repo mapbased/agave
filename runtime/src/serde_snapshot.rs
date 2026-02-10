@@ -106,17 +106,17 @@ struct BankHashInfo {
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Default, Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
-struct UnusedAccounts {
-    unused1: HashSet<Pubkey>,
-    unused2: HashSet<Pubkey>,
-    unused3: HashMap<Pubkey, u64>,
+pub struct UnusedAccounts {
+    pub unused1: HashSet<Pubkey>,
+    pub unused2: HashSet<Pubkey>,
+    pub unused3: HashMap<Pubkey, u64>,
 }
 
 // Deserializable version of Bank which need not be serializable,
 // because it's handled by SerializableVersionedBank.
 // So, sync fields with it!
 #[derive(Clone, Deserialize)]
-struct DeserializableVersionedBank {
+pub struct DeserializableVersionedBank {
     blockhash_queue: BlockhashQueue,
     ancestors: AncestorsForSerialization,
     hash: Hash,
@@ -413,17 +413,17 @@ where
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[cfg_attr(feature = "dev-context-only-utils", derive(PartialEq))]
 #[derive(Clone, Debug, Deserialize)]
-struct ExtraFieldsToDeserialize {
+pub struct ExtraFieldsToDeserialize {
     #[serde(deserialize_with = "default_on_eof")]
-    lamports_per_signature: u64,
+    pub lamports_per_signature: u64,
     #[serde(deserialize_with = "default_on_eof")]
-    _obsolete_incremental_snapshot_persistence: Option<ObsoleteIncrementalSnapshotPersistence>,
+    pub _obsolete_incremental_snapshot_persistence: Option<ObsoleteIncrementalSnapshotPersistence>,
     #[serde(deserialize_with = "default_on_eof")]
-    _obsolete_epoch_accounts_hash: Option<Hash>,
+    pub _obsolete_epoch_accounts_hash: Option<Hash>,
     #[serde(deserialize_with = "default_on_eof")]
-    versioned_epoch_stakes: HashMap<u64, VersionedEpochStakes>,
+    pub versioned_epoch_stakes: HashMap<u64, VersionedEpochStakes>,
     #[serde(deserialize_with = "default_on_eof")]
-    accounts_lt_hash: Option<SerdeAccountsLtHash>,
+    pub accounts_lt_hash: Option<SerdeAccountsLtHash>,
 }
 
 /// Extra fields that are serialized at the end of snapshots.
