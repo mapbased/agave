@@ -726,7 +726,7 @@ impl SystemMonitorService {
         const CPUID_MANUFACTURER_EDX_AMD: u32 = 0x69746e65;
         const CPUID_MANUFACTURER_ECX_AMD: u32 = 0x444d4163;
 
-        unsafe {
+        {
             let cpuid_mfr = __cpuid(0);
             let cpuid_empty = CpuidResult {
                 eax: 0,
