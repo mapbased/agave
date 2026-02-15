@@ -73,16 +73,16 @@ const MAX_STREAM_SIZE: u64 = 32 * 1024 * 1024 * 1024;
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AccountsDbFields<T>(
-    HashMap<Slot, Vec<T>>,
-    u64, // obsolete, formerly write_version
-    Slot,
-    BankHashInfo,
+    pub HashMap<Slot, Vec<T>>,
+    pub u64, // obsolete, formerly write_version
+    pub Slot,
+    pub BankHashInfo,
     /// all slots that were roots within the last epoch
     #[serde(deserialize_with = "default_on_eof")]
-    Vec<Slot>,
+    pub Vec<Slot>,
     /// slots that were roots within the last epoch for which we care about the hash value
     #[serde(deserialize_with = "default_on_eof")]
-    Vec<(Slot, Hash)>,
+    pub Vec<(Slot, Hash)>,
 );
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
@@ -98,10 +98,10 @@ pub struct ObsoleteIncrementalSnapshotPersistence {
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct BankHashInfo {
-    obsolete_accounts_delta_hash: [u8; 32],
-    obsolete_accounts_hash: [u8; 32],
-    stats: BankHashStats,
+pub struct BankHashInfo {
+    pub obsolete_accounts_delta_hash: [u8; 32],
+    pub obsolete_accounts_hash: [u8; 32],
+    pub stats: BankHashStats,
 }
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
@@ -117,39 +117,39 @@ pub struct UnusedAccounts {
 // So, sync fields with it!
 #[derive(Clone, Deserialize)]
 pub struct DeserializableVersionedBank {
-    blockhash_queue: BlockhashQueue,
-    ancestors: AncestorsForSerialization,
-    hash: Hash,
-    parent_hash: Hash,
-    parent_slot: Slot,
-    hard_forks: HardForks,
-    transaction_count: u64,
-    tick_height: u64,
-    signature_count: u64,
-    capitalization: u64,
-    max_tick_height: u64,
-    hashes_per_tick: Option<u64>,
-    ticks_per_slot: u64,
-    ns_per_slot: u128,
-    genesis_creation_time: UnixTimestamp,
-    slots_per_year: f64,
-    accounts_data_len: u64,
-    slot: Slot,
-    epoch: Epoch,
-    block_height: u64,
-    collector_id: Pubkey,
-    collector_fees: u64,
-    _fee_calculator: FeeCalculator,
-    fee_rate_governor: FeeRateGovernor,
-    _collected_rent: u64,
-    rent_collector: RentCollector,
-    epoch_schedule: EpochSchedule,
-    inflation: Inflation,
-    stakes: Stakes<Delegation>,
+    pub blockhash_queue: BlockhashQueue,
+    pub ancestors: AncestorsForSerialization,
+    pub hash: Hash,
+    pub parent_hash: Hash,
+    pub parent_slot: Slot,
+    pub hard_forks: HardForks,
+    pub transaction_count: u64,
+    pub tick_height: u64,
+    pub signature_count: u64,
+    pub capitalization: u64,
+    pub max_tick_height: u64,
+    pub hashes_per_tick: Option<u64>,
+    pub ticks_per_slot: u64,
+    pub ns_per_slot: u128,
+    pub genesis_creation_time: UnixTimestamp,
+    pub slots_per_year: f64,
+    pub accounts_data_len: u64,
+    pub slot: Slot,
+    pub epoch: Epoch,
+    pub block_height: u64,
+    pub collector_id: Pubkey,
+    pub collector_fees: u64,
+    pub _fee_calculator: FeeCalculator,
+    pub fee_rate_governor: FeeRateGovernor,
+    pub _collected_rent: u64,
+    pub rent_collector: RentCollector,
+    pub epoch_schedule: EpochSchedule,
+    pub inflation: Inflation,
+    pub stakes: Stakes<Delegation>,
     #[allow(dead_code)]
-    unused_accounts: UnusedAccounts,
-    unused_epoch_stakes: HashMap<Epoch, ()>,
-    is_delta: bool,
+    pub unused_accounts: UnusedAccounts,
+    pub unused_epoch_stakes: HashMap<Epoch, ()>,
+    pub is_delta: bool,
 }
 
 impl From<DeserializableVersionedBank> for BankFieldsToDeserialize {
@@ -443,7 +443,7 @@ pub struct ExtraFieldsToSerialize {
     pub accounts_lt_hash: Option<SerdeAccountsLtHash>,
 }
 
-fn deserialize_bank_fields<R>(
+pub fn deserialize_bank_fields<R>(
     mut stream: &mut BufReader<R>,
 ) -> Result<
     (
