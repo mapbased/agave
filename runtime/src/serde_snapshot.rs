@@ -57,7 +57,7 @@ use {
 
 mod obsolete_accounts;
 mod status_cache;
-mod storage;
+pub mod storage;
 mod tests;
 mod types;
 mod utils;
