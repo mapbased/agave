@@ -385,14 +385,14 @@ impl TransactionAccounts {
         // The unwrap is safe because accounts.len() == borrow_counters.len(), so the missing
         // account error should have been returned above.
         let svm_account = unsafe {
-            (*self.shared_account_fields.get())
+            &*(self.shared_account_fields )
                 .get(index as usize)
                 .unwrap()
                 .get()
         };
 
         let private_fields = unsafe {
-            (*self.private_account_fields.get())
+            &*(self.private_account_fields )
                 .get(index as usize)
                 .unwrap()
                 .get()
@@ -478,7 +478,7 @@ impl TransactionAccounts {
     pub(crate) fn account_key(&self, index: IndexOfAccount) -> Option<&Pubkey> {
         // SAFETY: We never modify an account key, so returning a reference to it is safe.
         unsafe {
-            (*self.shared_account_fields.get())
+            (*self.shared_account_fields)
                 .get(index as usize)
                 .map(|acc| &(*acc.get()).key)
         }
@@ -487,7 +487,7 @@ impl TransactionAccounts {
     pub(crate) fn account_keys_iter(&self) -> impl Iterator<Item = &Pubkey> {
         // SAFETY: We never modify account keys, so returning an immutable reference to them is safe.
         unsafe {
-            (*self.shared_account_fields.get())
+            (*self.shared_account_fields )
                 .iter()
                 .map(|item| &(*item.get()).key)
         }
