@@ -519,11 +519,11 @@ dependencies = [
  "bitvec",
  "bs58",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "histogram",
  "itertools 0.12.1",
  "log",
- "lru",
+ "lru 0.7.8",
  "parking_lot 0.12.3",
  "qualifier_attr",
  "rand 0.8.5",
@@ -2520,6 +2520,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if 1.0.4",
+ "crossbeam-utils",
+ "hashbrown 0.14.3",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core 0.9.8",
+ "serde",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3496,7 +3511,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68a7f542ee6b35af73b06abc0dad1c1bae89964e4e253bc4b587b91c9637867b"
 dependencies = [
  "cfg-if 1.0.4",
- "dashmap",
+ "dashmap 5.5.3",
  "futures 0.3.31",
  "futures-timer",
  "no-std-compat",
@@ -4706,6 +4721,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e999beba7b6e8345721bd280141ed958096a2e4abdf74f67ff4ce49b4b54e47a"
 dependencies = [
  "hashbrown 0.12.3",
+]
+
+[[package]]
+name = "lru"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.1",
 ]
 
 [[package]]
@@ -6154,7 +6178,7 @@ dependencies = [
  "cc",
  "libc 0.2.177",
  "libm",
- "lru",
+ "lru 0.7.8",
  "parking_lot 0.11.2",
  "smallvec",
  "spin",
@@ -6384,11 +6408,15 @@ dependencies = [
  "blake3",
  "clap 4.5.31",
  "crossbeam-channel",
+ "ctrlc",
+ "dashmap 6.1.0",
  "env_logger",
  "flate2",
  "libc 0.2.177",
  "log",
+ "lru 0.12.5",
  "lz4",
+ "memmap2 0.9.8",
  "modular-bitfield",
  "parking_lot 0.12.3",
  "rand 0.8.5",
@@ -6439,6 +6467,7 @@ dependencies = [
  "spl-token-interface",
  "tar",
  "tempfile",
+ "thread_local",
  "tokio",
  "ureq",
  "wincode",
@@ -6920,7 +6949,7 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e56dd856803e253c8f298af3f4d7eb0ae5e23a737252cd90bb4f3b435033b2d"
 dependencies = [
- "dashmap",
+ "dashmap 5.5.3",
  "futures 0.3.31",
  "lazy_static",
  "log",
@@ -7347,7 +7376,7 @@ dependencies = [
  "bytemuck_derive",
  "criterion",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "indexmap 2.11.4",
  "itertools 0.12.1",
  "libsecp256k1",
@@ -8069,7 +8098,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "futures 0.3.31",
  "futures-util",
  "indexmap 2.11.4",
@@ -8345,7 +8374,7 @@ dependencies = [
  "chrono",
  "criterion",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "derive_more 2.0.1",
  "fs_extra",
  "futures 0.3.31",
@@ -8353,7 +8382,7 @@ dependencies = [
  "itertools 0.12.1",
  "libc 0.2.177",
  "log",
- "lru",
+ "lru 0.7.8",
  "min-max-heap",
  "num_cpus",
  "num_enum",
@@ -8855,7 +8884,7 @@ dependencies = [
  "bs58",
  "bv",
  "bytes",
- "dashmap",
+ "dashmap 5.5.3",
  "im",
  "log",
  "memmap2 0.5.10",
@@ -9021,7 +9050,7 @@ dependencies = [
  "indexmap 2.11.4",
  "itertools 0.12.1",
  "log",
- "lru",
+ "lru 0.7.8",
  "num-traits",
  "num_cpus",
  "rand 0.7.3",
@@ -9280,14 +9309,14 @@ dependencies = [
  "chrono-humanize",
  "criterion",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "eager",
  "fs_extra",
  "futures 0.3.31",
  "itertools 0.12.1",
  "lazy-lru",
  "log",
- "lru",
+ "lru 0.7.8",
  "mockall",
  "num_cpus",
  "num_enum",
@@ -9587,7 +9616,7 @@ dependencies = [
  "bincode",
  "bytes",
  "cfg-if 1.0.4",
- "dashmap",
+ "dashmap 5.5.3",
  "hxdmp",
  "itertools 0.12.1",
  "log",
@@ -10194,7 +10223,7 @@ dependencies = [
  "bincode",
  "bs58",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "itertools 0.12.1",
  "jsonrpc-core",
  "jsonrpc-core-client",
@@ -10475,7 +10504,7 @@ dependencies = [
  "bv",
  "bytemuck",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "dir-diff",
  "ed25519-dalek 1.0.1",
  "fnv",
@@ -11067,7 +11096,7 @@ dependencies = [
  "bytes",
  "clap 4.5.31",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "futures 0.3.31",
  "futures-util",
  "governor",
@@ -11575,7 +11604,7 @@ dependencies = [
  "crossbeam-channel",
  "futures 0.3.31",
  "log",
- "lru",
+ "lru 0.7.8",
  "rustls 0.23.34",
  "solana-cli-config",
  "solana-clock",
@@ -11801,7 +11830,7 @@ dependencies = [
  "itertools 0.12.1",
  "lazy-lru",
  "log",
- "lru",
+ "lru 0.7.8",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rayon",
@@ -11882,7 +11911,7 @@ dependencies = [
  "aquamarine",
  "assert_matches",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "derive-where",
  "derive_more 2.0.1",
  "dyn-clone",
@@ -11945,7 +11974,7 @@ dependencies = [
  "bytes",
  "clap 4.5.31",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "futures 0.3.31",
  "futures-util",
  "governor",
