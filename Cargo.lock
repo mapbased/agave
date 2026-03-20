@@ -6421,6 +6421,7 @@ dependencies = [
  "agave-syscalls",
  "arrayref",
  "art",
+ "axum 0.8.6",
  "bincode",
  "blake3",
  "clap 4.5.31",
