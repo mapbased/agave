@@ -6424,6 +6424,7 @@ dependencies = [
  "axum 0.8.6",
  "bincode",
  "blake3",
+ "bytes",
  "clap 4.5.31",
  "crossbeam-channel",
  "ctrlc",
