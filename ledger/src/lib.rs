@@ -41,7 +41,7 @@ pub mod shred;
 #[cfg(not(feature = "agave-unstable-api"))]
 pub(crate) mod shred;
 
-mod shredder;
+pub mod shredder;
 pub mod sigverify_shreds;
 pub mod slot_stats;
 mod staking_utils;
