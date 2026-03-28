@@ -6464,6 +6464,7 @@ dependencies = [
  "solana-ledger",
  "solana-message",
  "solana-net-utils",
+ "solana-nohash-hasher",
  "solana-perf",
  "solana-program-pack",
  "solana-program-runtime",
