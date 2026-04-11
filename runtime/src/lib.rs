@@ -35,7 +35,7 @@ pub mod snapshot_controller;
 pub mod snapshot_minimizer;
 pub mod snapshot_package;
 pub mod snapshot_utils;
-mod stake_account;
+pub mod stake_account;
 pub mod stake_history;
 pub mod stake_utils;
 pub mod stake_weighted_timestamp;

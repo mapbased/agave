@@ -58,14 +58,14 @@ type StakeAccount = stake_account::StakeAccount<Delegation>;
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Default, Debug)]
-pub(crate) struct StakesCache(RwLock<Stakes<StakeAccount>>);
+pub struct StakesCache(pub RwLock<Stakes<StakeAccount>>);
 
 impl StakesCache {
-    pub(crate) fn new(stakes: Stakes<StakeAccount>) -> Self {
+    pub fn new(stakes: Stakes<StakeAccount>) -> Self {
         Self(RwLock::new(stakes))
     }
 
-    pub(crate) fn stakes(&self) -> RwLockReadGuard<'_, Stakes<StakeAccount>> {
+    pub fn stakes(&self) -> RwLockReadGuard<'_, Stakes<StakeAccount>> {
         self.0.read().unwrap()
     }
 
@@ -164,19 +164,19 @@ impl StakesCache {
 #[derive(Default, Clone, PartialEq, Debug, Deserialize, Serialize)]
 pub struct Stakes<T: Clone> {
     /// vote accounts
-    vote_accounts: VoteAccounts,
+    pub vote_accounts: VoteAccounts,
 
     /// stake_delegations
-    stake_delegations: ImHashMap<Pubkey, T>,
+    pub stake_delegations: ImHashMap<Pubkey, T>,
 
     /// unused
-    unused: u64,
+    pub unused: u64,
 
     /// current epoch, used to calculate current stake
-    epoch: Epoch,
+    pub epoch: Epoch,
 
     /// history of staking levels
-    stake_history: StakeHistory,
+    pub stake_history: StakeHistory,
 }
 
 impl<T: Clone> Stakes<T> {
@@ -194,7 +194,7 @@ impl Stakes<StakeAccount> {
     /// full account state for respective stake pubkeys. get_account function
     /// should return the account at the respective slot where stakes where
     /// cached.
-    pub(crate) fn new<F>(stakes: &Stakes<Delegation>, get_account: F) -> Result<Self, Error>
+    pub fn new<F>(stakes: &Stakes<Delegation>, get_account: F) -> Result<Self, Error>
     where
         F: Fn(&Pubkey) -> Option<AccountSharedData> + Sync,
     {
@@ -278,11 +278,11 @@ impl Stakes<StakeAccount> {
         }
     }
 
-    pub(crate) fn history(&self) -> &StakeHistory {
+    pub fn history(&self) -> &StakeHistory {
         &self.stake_history
     }
 
-    pub(crate) fn calculate_activated_stake(
+    pub fn calculate_activated_stake(
         &self,
         next_epoch: Epoch,
         thread_pool: &ThreadPool,
@@ -429,7 +429,7 @@ impl Stakes<StakeAccount> {
     /// iterate over it with [`rayon`].
     ///
     /// [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
-    pub(crate) fn stake_delegations(&self) -> &ImHashMap<Pubkey, StakeAccount> {
+    pub fn stake_delegations(&self) -> &ImHashMap<Pubkey, StakeAccount> {
         &self.stake_delegations
     }
 
@@ -445,7 +445,7 @@ impl Stakes<StakeAccount> {
     /// elements.
     ///
     /// [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
-    pub(crate) fn stake_delegations_vec(&self) -> Vec<(&Pubkey, &StakeAccount)> {
+    pub fn stake_delegations_vec(&self) -> Vec<(&Pubkey, &StakeAccount)> {
         self.stake_delegations.iter().collect()
     }
 

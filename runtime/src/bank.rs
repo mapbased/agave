@@ -207,8 +207,9 @@ pub mod bank_hash_details;
 pub mod builtins;
 mod check_transactions;
 mod fee_distribution;
-mod metrics;
-pub(crate) mod partitioned_epoch_rewards;
+pub mod metrics;
+pub use metrics::RewardsMetrics;
+pub mod partitioned_epoch_rewards;
 mod recent_blockhashes_account;
 mod serde_snapshot;
 mod sysvar_cache;
@@ -924,13 +925,13 @@ pub struct Bank {
 }
 
 #[derive(Debug)]
-struct VoteReward {
-    vote_account: AccountSharedData,
-    commission: u8,
-    vote_rewards: u64,
+pub struct VoteReward {
+    pub vote_account: AccountSharedData,
+    pub commission: u8,
+    pub vote_rewards: u64,
 }
 
-type VoteRewards = HashMap<Pubkey, VoteReward, PubkeyHasherBuilder>;
+pub type VoteRewards = HashMap<Pubkey, VoteReward, PubkeyHasherBuilder>;
 
 #[derive(Debug, Default)]
 pub struct NewBankOptions {
