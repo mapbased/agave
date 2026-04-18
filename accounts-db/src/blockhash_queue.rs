@@ -63,6 +63,10 @@ impl BlockhashQueue {
         self.last_hash.expect("no hash has been set")
     }
 
+    pub fn get_last_hash(&self) -> Option<Hash> {
+        self.last_hash
+    }
+
     pub fn get_lamports_per_signature(&self, hash: &Hash) -> Option<u64> {
         self.hashes
             .get(hash)

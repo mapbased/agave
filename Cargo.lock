@@ -75,6 +75,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "agave-builtins"
+version = "0.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42ea5825ae91f77f5ed419e16f3d7baf4781ce74b09a54ef51bd9e9e49f616e4"
+
+[[package]]
 name = "agave-cargo-registry"
 version = "3.1.12"
 dependencies = [
@@ -6414,7 +6420,9 @@ dependencies = [
 name = "runner"
 version = "0.1.0"
 dependencies = [
+ "agave-builtins",
  "agave-feature-set",
+ "agave-reserved-account-keys",
  "agave-snapshots",
  "agave-syscalls",
  "arrayref",
@@ -6422,6 +6430,7 @@ dependencies = [
  "axum 0.8.6",
  "bincode",
  "blake3",
+ "bytemuck",
  "bytes",
  "clap 4.5.31",
  "crossbeam-channel",
@@ -6447,9 +6456,13 @@ dependencies = [
  "solana-account",
  "solana-accounts-db",
  "solana-address 1.1.0",
+ "solana-address-lookup-table-interface",
+ "solana-borsh",
+ "solana-bpf-loader-program",
  "solana-clock",
  "solana-commitment-config",
  "solana-compute-budget-instruction",
+ "solana-compute-budget-interface",
  "solana-core",
  "solana-download-utils",
  "solana-entry",
@@ -6478,7 +6491,9 @@ dependencies = [
  "solana-rpc-client-api",
  "solana-runtime",
  "solana-runtime-transaction",
+ "solana-sdk-ids",
  "solana-serde",
+ "solana-sha256-hasher",
  "solana-signature",
  "solana-signer",
  "solana-stake-interface",
