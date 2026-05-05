@@ -6415,6 +6415,7 @@ name = "runner"
 version = "0.1.0"
 dependencies = [
  "agave-feature-set",
+ "agave-precompiles",
  "agave-reserved-account-keys",
  "agave-snapshots",
  "agave-syscalls",
@@ -6480,6 +6481,7 @@ dependencies = [
  "solana-net-utils",
  "solana-nohash-hasher",
  "solana-perf",
+ "solana-precompile-error",
  "solana-program-pack",
  "solana-program-runtime",
  "solana-pubkey",
