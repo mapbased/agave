@@ -5,7 +5,7 @@ use {
 };
 
 /// The serialized AccountsFileId type is fixed as usize
-pub(crate) type SerializedAccountsFileId = usize;
+pub type SerializedAccountsFileId = usize;
 
 // Serializable version of AccountStorageEntry for snapshot format
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
