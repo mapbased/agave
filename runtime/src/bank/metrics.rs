@@ -17,11 +17,11 @@ pub(crate) struct NewEpochTimings {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct RewardsMetrics {
-    pub(crate) calculate_points_us: AtomicU64,
-    pub(crate) redeem_rewards_us: u64,
-    pub(crate) store_stake_accounts_us: AtomicU64,
-    pub(crate) store_commission_accounts_us: AtomicU64,
+pub struct RewardsMetrics {
+    pub  calculate_points_us: AtomicU64,
+    pub  redeem_rewards_us: u64,
+    pub  store_stake_accounts_us: AtomicU64,
+    pub  store_commission_accounts_us: AtomicU64,
 }
 
 pub(crate) struct NewBankTimings {

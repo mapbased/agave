@@ -133,6 +133,7 @@ members = [
     "watchtower",
     "xdp",
     "xdp-ebpf",
+    "runner"
 ]
 
 exclude = [

@@ -40,22 +40,19 @@ impl<T> StakeAccount<T> {
         self.account.lamports()
     }
 
-    #[inline]
-    pub(crate) fn stake_state(&self) -> &StakeStateV2 {
+    pub fn stake_state(&self) -> &StakeStateV2 {
         &self.stake_state
     }
 }
 
 impl StakeAccount<Delegation> {
-    #[inline]
-    pub(crate) fn delegation(&self) -> &Delegation {
+    pub fn delegation(&self) -> &Delegation {
         // Safe to unwrap here because StakeAccount<Delegation> will always
         // only wrap a stake-state which is a delegation.
         self.stake_state.delegation_ref().unwrap()
     }
 
-    #[inline]
-    pub(crate) fn stake(&self) -> &Stake {
+    pub fn stake(&self) -> &Stake {
         // Safe to unwrap here because StakeAccount<Delegation> will always
         // only wrap a stake-state.
         self.stake_state.stake_ref().unwrap()

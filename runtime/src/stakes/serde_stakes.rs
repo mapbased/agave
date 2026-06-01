@@ -179,8 +179,8 @@ impl Serialize for SerdeStakeAccountMapToStakeFormat {
 /// Its bincode serializaiton format is identical as Stakes<T>, but allows faster
 /// deserialization without creating im::HashMap (such conversion is deferred until
 /// data is actually needed).
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct DeserializableStakes<T> {
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+pub struct DeserializableStakes<T> {
     pub vote_accounts: VoteAccounts,
     pub stake_delegations: Vec<(Pubkey, T)>,
     pub unused: u64,

@@ -70,9 +70,9 @@ impl From<SkippedReason> for InflationPointCalculationEvent {
 
 // DEVELOPER NOTE: The commission is intentionally not included here because it
 // is determined from past epoch vote state.
-pub(crate) struct DelegatedVoteState<'a> {
-    pub(crate) credits: u64,
-    pub(crate) epoch_credits_iter: Box<dyn Iterator<Item = (Epoch, u64, u64)> + 'a>,
+pub struct DelegatedVoteState<'a> {
+    pub credits: u64,
+    pub epoch_credits_iter: Box<dyn Iterator<Item = (Epoch, u64, u64)> + 'a>,
 }
 
 impl<'a> From<&'a VoteStateView> for DelegatedVoteState<'a> {
@@ -84,7 +84,7 @@ impl<'a> From<&'a VoteStateView> for DelegatedVoteState<'a> {
     }
 }
 
-pub(crate) fn calculate_points(
+pub fn calculate_points(
     stake_state: &StakeStateV2,
     vote_state: DelegatedVoteState,
     stake_history: &StakeHistory,

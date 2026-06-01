@@ -28,7 +28,7 @@ struct CalculatedStakeRewards {
 /// * Stakers reward
 /// * Voters reward
 /// * Updated stake information
-pub(crate) fn redeem_rewards(
+pub fn redeem_rewards(
     rewarded_epoch: Epoch,
     stake_state: &StakeStateV2,
     voter_commission_bps: u16,

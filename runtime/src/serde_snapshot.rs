@@ -60,7 +60,7 @@ use {
 };
 
 mod obsolete_accounts;
-mod status_cache;
+pub mod status_cache;
 mod storage;
 mod tests;
 mod types;
@@ -76,7 +76,7 @@ const MAX_STREAM_SIZE: u64 = 32 * 1024 * 1024 * 1024;
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug, Deserialize)]
-pub(crate) struct AccountsDbFields<T>(
+pub struct AccountsDbFields<T>(
     Vec<(Slot, SmallVec<[T; 1]>)>,
     u64, // unused, formerly write_version
     Slot,
@@ -452,7 +452,7 @@ pub struct ExtraFieldsToSerialize {
     pub accounts_lt_hash: Option<SerdeAccountsLtHash>,
 }
 
-fn deserialize_bank_fields<R>(
+pub fn deserialize_bank_fields<R>(
     mut stream: &mut BufReader<R>,
 ) -> Result<
     (
