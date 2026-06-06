@@ -27,7 +27,7 @@ struct CalculatedStakeRewards {
 /// * Voters reward
 /// * Updated stake information
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn redeem_rewards<'a>(
+pub fn redeem_rewards<'a>(
     stake_state: &StakeStateV2,
     voter_commission_bps: u16,
     vote_state: DelegatedVoteState,

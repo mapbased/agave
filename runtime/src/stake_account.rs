@@ -37,12 +37,12 @@ pub enum Error {
 
 impl<T> StakeAccount<T> {
     #[inline]
-    pub(crate) fn lamports(&self) -> u64 {
+    pub fn lamports(&self) -> u64 {
         self.account.lamports()
     }
 
     #[inline]
-    pub(crate) fn stake_state(&self) -> &StakeStateV2 {
+    pub fn stake_state(&self) -> &StakeStateV2 {
         &self.stake_state
     }
 }

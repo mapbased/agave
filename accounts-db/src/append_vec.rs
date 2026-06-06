@@ -677,7 +677,7 @@ impl AppendVec {
     ///
     /// Prefer get_stored_account_callback() when possible, as it does not contain file format
     /// implementation details, and thus potentially can read less and be faster.
-    fn get_stored_account_meta_callback<Ret>(
+    pub fn get_stored_account_meta_callback<Ret>(
         &self,
         offset: usize,
         mut callback: impl for<'local> FnMut(StoredAccountMeta<'local>) -> Ret,

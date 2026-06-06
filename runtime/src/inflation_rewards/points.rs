@@ -30,12 +30,12 @@ pub(crate) struct CalculatedStakePoints {
 }
 
 /// Combination of info needed to calculate rewards
-pub(crate) struct CalculationEnvironment<'a> {
-    pub(crate) rewarded_epoch: Epoch,
-    pub(crate) point_value: &'a PointValue,
-    pub(crate) stake_history: &'a StakeHistory,
-    pub(crate) new_rate_activation_epoch: Option<Epoch>,
-    pub(crate) commission_rate_in_basis_points: bool,
+pub struct CalculationEnvironment<'a> {
+    pub rewarded_epoch: Epoch,
+    pub point_value: &'a PointValue,
+    pub stake_history: &'a StakeHistory,
+    pub new_rate_activation_epoch: Option<Epoch>,
+    pub commission_rate_in_basis_points: bool,
 }
 
 #[derive(Debug)]
@@ -79,9 +79,9 @@ impl From<SkippedReason> for InflationPointCalculationEvent {
 
 // DEVELOPER NOTE: The commission is intentionally not included here because it
 // is determined from past epoch vote state.
-pub(crate) struct DelegatedVoteState<'a> {
-    pub(crate) credits: u64,
-    pub(crate) epoch_credits_iter: Box<dyn Iterator<Item = (Epoch, u64, u64)> + 'a>,
+pub struct DelegatedVoteState<'a> {
+    pub credits: u64,
+    pub epoch_credits_iter: Box<dyn Iterator<Item = (Epoch, u64, u64)> + 'a>,
 }
 
 impl<'a> From<&'a VoteStateView> for DelegatedVoteState<'a> {
@@ -93,7 +93,7 @@ impl<'a> From<&'a VoteStateView> for DelegatedVoteState<'a> {
     }
 }
 
-pub(crate) fn calculate_points(
+pub fn calculate_points(
     stake_state: &StakeStateV2,
     vote_state: DelegatedVoteState,
     stake_history: &StakeHistory,

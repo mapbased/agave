@@ -182,7 +182,7 @@ impl Serialize for SerdeStakeAccountMapToStakeFormat {
 /// Its bincode serializaiton format is identical as Stakes<T>, but allows faster
 /// deserialization without creating imbl::HashMap (such conversion is deferred until
 /// data is actually needed).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(crate) struct DeserializableStakes<T> {
     pub vote_accounts: VoteAccounts,

@@ -32,8 +32,7 @@ use {
 };
 
 mod serde_stakes;
-#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-pub(crate) use serde_stakes::DeserializableStakes;
+pub use serde_stakes::DeserializableStakes;
 pub use serde_stakes::SerdeStakesToStakeFormat;
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
 pub(crate) use serde_stakes::serialize_stake_accounts_to_delegation_format;
@@ -65,18 +64,18 @@ type StakeAccount = stake_account::StakeAccount<Delegation>;
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Default, Debug)]
-pub(crate) struct StakesCache(RwLock<Stakes<StakeAccount>>);
+pub struct StakesCache(RwLock<Stakes<StakeAccount>>);
 
 impl StakesCache {
-    pub(crate) fn new(stakes: Stakes<StakeAccount>) -> Self {
+    pub fn new(stakes: Stakes<StakeAccount>) -> Self {
         Self(RwLock::new(stakes))
     }
 
-    pub(crate) fn stakes(&self) -> RwLockReadGuard<'_, Stakes<StakeAccount>> {
+    pub fn stakes(&self) -> RwLockReadGuard<'_, Stakes<StakeAccount>> {
         self.0.read().unwrap()
     }
 
-    pub(crate) fn check_and_store(
+    pub fn check_and_store(
         &self,
         pubkey: &Pubkey,
         account: &impl ReadableAccount,
@@ -149,7 +148,7 @@ impl StakesCache {
         }
     }
 
-    pub(crate) fn activate_epoch(
+    pub fn activate_epoch(
         &self,
         next_epoch: Epoch,
         stake_history: StakeHistory,
@@ -240,8 +239,7 @@ impl Stakes<StakeAccount> {
     /// full account state for respective stake pubkeys. get_account function
     /// should return the account at the respective slot where stakes where
     /// cached.
-    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-    pub(crate) fn load_from_deserialized_delegations<F>(
+    pub fn load_from_deserialized_delegations<F>(
         stakes: DeserializableStakes<Delegation>,
         get_account: F,
     ) -> Result<Self, Error>
@@ -328,7 +326,7 @@ impl Stakes<StakeAccount> {
         &self.stake_history
     }
 
-    pub(crate) fn calculate_activated_stake(
+    pub fn calculate_activated_stake(
         &self,
         next_epoch: Epoch,
         thread_pool: &ThreadPool,
@@ -475,7 +473,7 @@ impl Stakes<StakeAccount> {
     /// iterate over it with [`rayon`].
     ///
     /// [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
-    pub(crate) fn stake_delegations(&self) -> &ImblHashMap<Pubkey, StakeAccount> {
+    pub fn stake_delegations(&self) -> &ImblHashMap<Pubkey, StakeAccount> {
         &self.stake_delegations
     }
 
@@ -606,6 +604,20 @@ fn refresh_vote_accounts(
             (vote_pubkey, (delegated_stake, vote_account.clone()))
         })
         .collect()
+}
+
+impl<T: Clone> Stakes<T> {
+    /// Convert deserialized stakes into runtime stakes representation.
+    /// This is exposed as `pub` so external crates (e.g. `runner`) can access it.
+    pub fn from_deserialized(stakes: DeserializableStakes<T>) -> Self {
+        Self {
+            vote_accounts: stakes.vote_accounts,
+            stake_delegations: ImblHashMap::from_iter(stakes.stake_delegations),
+            unused: stakes.unused,
+            epoch: stakes.epoch,
+            stake_history: stakes.stake_history,
+        }
+    }
 }
 
 #[cfg(test)]

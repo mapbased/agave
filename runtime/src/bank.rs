@@ -229,8 +229,8 @@ pub mod builtins;
 mod check_transactions;
 pub mod entry_bytes_budget;
 mod fee_distribution;
-mod metrics;
-pub(crate) mod partitioned_epoch_rewards;
+pub mod metrics;
+pub mod partitioned_epoch_rewards;
 mod recent_blockhashes_account;
 mod serde_snapshot;
 mod sysvar_cache;
@@ -461,36 +461,36 @@ impl TransactionLogCollector {
 /// deserialization will use a new mechanism or otherwise be in sync more clearly.
 #[derive(Clone, Debug)]
 pub struct BankFieldsToDeserialize {
-    pub(crate) blockhash_queue: BlockhashQueue,
-    pub(crate) hash: Hash,
-    pub(crate) parent_hash: Hash,
-    pub(crate) parent_slot: Slot,
-    pub(crate) hard_forks: HardForks,
-    pub(crate) transaction_count: u64,
-    pub(crate) tick_height: u64,
-    pub(crate) signature_count: u64,
-    pub(crate) capitalization: u64,
-    pub(crate) max_tick_height: u64,
-    pub(crate) hashes_per_tick: Option<u64>,
-    pub(crate) ticks_per_slot: u64,
-    pub(crate) ns_per_slot: u128,
-    pub(crate) genesis_creation_time: UnixTimestamp,
-    pub(crate) slots_per_year: f64,
-    pub(crate) slot: Slot,
-    pub(crate) block_height: u64,
-    pub(crate) leader_id: Pubkey,
-    pub(crate) fee_rate_governor: FeeRateGovernor,
-    pub(crate) epoch_schedule: EpochSchedule,
-    pub(crate) inflation: Inflation,
-    pub(crate) stakes: DeserializableStakes<Delegation>,
+    pub blockhash_queue: BlockhashQueue,
+    pub hash: Hash,
+    pub parent_hash: Hash,
+    pub parent_slot: Slot,
+    pub hard_forks: HardForks,
+    pub transaction_count: u64,
+    pub tick_height: u64,
+    pub signature_count: u64,
+    pub capitalization: u64,
+    pub max_tick_height: u64,
+    pub hashes_per_tick: Option<u64>,
+    pub ticks_per_slot: u64,
+    pub ns_per_slot: u128,
+    pub genesis_creation_time: UnixTimestamp,
+    pub slots_per_year: f64,
+    pub slot: Slot,
+    pub block_height: u64,
+    pub leader_id: Pubkey,
+    pub fee_rate_governor: FeeRateGovernor,
+    pub epoch_schedule: EpochSchedule,
+    pub inflation: Inflation,
+    pub stakes: DeserializableStakes<Delegation>,
     /// Transformed into `HashMap<Epoch, VersionedEpochStakes>` in `serde_snapshot` and passed to
     /// `Bank::new_from_snapshot` as separate parameter for performance (conversion is time consuming)
-    pub(crate) versioned_epoch_stakes: Vec<(Epoch, DeserializableVersionedEpochStakes)>,
-    pub(crate) is_delta: bool,
-    pub(crate) accounts_data_len: u64,
-    pub(crate) accounts_lt_hash: AccountsLtHash,
-    pub(crate) bank_hash_stats: BankHashStats,
-    pub(crate) block_id: Option<Hash>, // Option wrapper can be removed in version after v4.1
+    pub versioned_epoch_stakes: Vec<(Epoch, DeserializableVersionedEpochStakes)>,
+    pub is_delta: bool,
+    pub accounts_data_len: u64,
+    pub accounts_lt_hash: AccountsLtHash,
+    pub bank_hash_stats: BankHashStats,
+    pub block_id: Option<Hash>, // Option wrapper can be removed in version after v4.1
 }
 
 /// Bank's common fields shared by all supported snapshot versions for serialization.

@@ -27,7 +27,7 @@ use {
 const REWARD_CALCULATION_NUM_BLOCKS: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct PartitionedStakeReward {
+pub struct PartitionedStakeReward {
     /// Stake account address
     pub stake_pubkey: Pubkey,
     /// `Stake` state to be stored in account
@@ -41,7 +41,7 @@ pub(crate) struct PartitionedStakeReward {
 
 /// A vector of stake rewards.
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct PartitionedStakeRewards {
+pub struct PartitionedStakeRewards {
     /// Inner vector.
     rewards: Vec<Option<PartitionedStakeReward>>,
     /// Number of stake rewards.
@@ -49,7 +49,7 @@ pub(crate) struct PartitionedStakeRewards {
 }
 
 impl PartitionedStakeRewards {
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         let rewards = Vec::with_capacity(capacity);
         Self {
             rewards,
@@ -58,20 +58,20 @@ impl PartitionedStakeRewards {
     }
 
     /// Number of stake rewards.
-    pub(crate) fn num_rewards(&self) -> usize {
+    pub fn num_rewards(&self) -> usize {
         self.num_rewards
     }
 
     /// Total length, including both `Some` and `None` elements.
-    pub(crate) fn total_len(&self) -> usize {
+    pub fn total_len(&self) -> usize {
         self.rewards.len()
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<&Option<PartitionedStakeReward>> {
+    pub fn get(&self, index: usize) -> Option<&Option<PartitionedStakeReward>> {
         self.rewards.get(index)
     }
 
-    pub(crate) fn enumerated_rewards_iter(
+    pub fn enumerated_rewards_iter(
         &self,
     ) -> impl Iterator<Item = (usize, &PartitionedStakeReward)> {
         self.rewards
@@ -80,11 +80,11 @@ impl PartitionedStakeRewards {
             .filter_map(|(index, reward)| reward.as_ref().map(|reward| (index, reward)))
     }
 
-    fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<Option<PartitionedStakeReward>>] {
+    pub fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<Option<PartitionedStakeReward>>] {
         self.rewards.spare_capacity_mut()
     }
 
-    unsafe fn assume_init(&mut self, num_stake_rewards: usize) {
+    pub unsafe fn assume_init(&mut self, num_stake_rewards: usize) {
         unsafe {
             self.rewards.set_len(self.rewards.capacity());
         }
@@ -109,30 +109,30 @@ impl FromIterator<Option<PartitionedStakeReward>> for PartitionedStakeRewards {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StartBlockHeightAndRewards {
+pub struct StartBlockHeightAndRewards {
     /// the block height of the slot at which rewards distribution began
-    pub(crate) distribution_starting_block_height: u64,
+    pub distribution_starting_block_height: u64,
     /// calculated epoch rewards before partitioning
-    pub(crate) all_stake_rewards: Arc<PartitionedStakeRewards>,
+    pub all_stake_rewards: Arc<PartitionedStakeRewards>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StartBlockHeightAndPartitionedRewards {
+pub struct StartBlockHeightAndPartitionedRewards {
     /// the block height of the slot at which rewards distribution began
-    pub(crate) distribution_starting_block_height: u64,
+    pub distribution_starting_block_height: u64,
 
     /// calculated epoch rewards pending distribution
-    pub(crate) all_stake_rewards: Arc<PartitionedStakeRewards>,
+    pub all_stake_rewards: Arc<PartitionedStakeRewards>,
 
     /// indices of calculated epoch rewards per partition, outer Vec is by
     /// partition (one partition per block), inner Vec is the indices for one
     /// partition.
-    pub(crate) partition_indices: Vec<Vec<usize>>,
+    pub partition_indices: Vec<Vec<usize>>,
 }
 
 /// Represent whether bank is in the reward phase or not.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) enum EpochRewardStatus {
+pub enum EpochRewardStatus {
     /// this bank is in the reward phase.
     /// Contents are the start point for epoch reward calculation,
     /// i.e. parent_slot and parent_block height for the starting
@@ -144,25 +144,24 @@ pub(crate) enum EpochRewardStatus {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum EpochRewardPhase {
+pub enum EpochRewardPhase {
     Calculation(StartBlockHeightAndRewards),
     Distribution(StartBlockHeightAndPartitionedRewards),
 }
 
 #[derive(Debug)]
-pub(super) struct RewardCommission {
-    pub(super) commission_bps: u16,
-    pub(super) commission_lamports: u64,
+pub struct RewardCommission {
+    pub commission_bps: u16,
+    pub commission_lamports: u64,
 }
 
-pub(super) type RewardCommissions = HashMap<Pubkey, RewardCommission, PubkeyHasherBuilder>;
+pub type RewardCommissions = HashMap<Pubkey, RewardCommission, PubkeyHasherBuilder>;
 
 #[derive(Debug, Default)]
-pub(super) struct RewardCommissionAccounts {
+pub struct RewardCommissionAccounts {
     /// accounts with rewards to be stored
-    pub(super) accounts_with_rewards: Vec<(Pubkey, RewardInfo, AccountSharedData)>,
-    /// total lamports across all `accounts_with_rewards`
-    pub(super) total_reward_commission_lamports: u64,
+    pub accounts_with_rewards: Vec<(Pubkey, RewardInfo, AccountSharedData)>,
+    pub total_reward_commission_lamports: u64,
 }
 
 /// Wrapper struct to implement StorableAccounts for RewardCommissionAccounts
@@ -222,19 +221,18 @@ impl<'a> StorableAccounts<'a> for RewardCommissionAccountsStorable<'a> {
 }
 
 #[derive(Debug, Default)]
-/// result of calculating the stake rewards at end of epoch
-pub(super) struct StakeRewardCalculation {
+pub struct StakeRewardCalculation {
     /// each individual stake account to reward
-    stake_rewards: Arc<PartitionedStakeRewards>,
+    pub stake_rewards: Arc<PartitionedStakeRewards>,
     /// total lamports across all `stake_rewards`
-    total_stake_rewards_lamports: u64,
+    pub total_stake_rewards_lamports: u64,
 }
 
 #[derive(Debug)]
-struct CalculateValidatorRewardsResult {
-    reward_commissions: RewardCommissions,
-    stake_reward_calculation: StakeRewardCalculation,
-    point_value: PointValue,
+pub struct CalculateValidatorRewardsResult {
+    pub reward_commissions: RewardCommissions,
+    pub stake_reward_calculation: StakeRewardCalculation,
+    pub point_value: PointValue,
 }
 
 impl Default for CalculateValidatorRewardsResult {
@@ -250,17 +248,17 @@ impl Default for CalculateValidatorRewardsResult {
     }
 }
 
-pub(super) struct FilteredStakeDelegations<'a> {
-    stake_delegations: Vec<(&'a Pubkey, &'a StakeAccount<Delegation>)>,
-    min_stake_delegation: Option<u64>,
+pub struct FilteredStakeDelegations<'a> {
+    pub stake_delegations: Vec<(&'a Pubkey, &'a StakeAccount<Delegation>)>,
+    pub min_stake_delegation: Option<u64>,
 }
 
 impl<'a> FilteredStakeDelegations<'a> {
-    pub(super) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.stake_delegations.len()
     }
 
-    pub(super) fn par_iter(
+    pub fn par_iter(
         &'a self,
     ) -> impl IndexedParallelIterator<Item = Option<(&'a Pubkey, &'a StakeAccount<Delegation>)>>
     {
@@ -315,11 +313,11 @@ pub(super) struct EpochRewardCalculateParamInfo<'a> {
 /// This struct exists so we can have a function which does all the calculation with no
 /// side effects.
 #[derive(Debug)]
-pub(super) struct PartitionedRewardsCalculation {
-    reward_commissions: RewardCommissions,
-    stake_rewards: StakeRewardCalculation,
-    capitalization: u64,
-    point_value: PointValue,
+pub struct PartitionedRewardsCalculation {
+    pub reward_commissions: RewardCommissions,
+    pub stake_rewards: StakeRewardCalculation,
+    pub capitalization: u64,
+    pub point_value: PointValue,
 }
 
 pub(crate) type StakeRewards = Vec<StakeReward>;

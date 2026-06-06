@@ -695,6 +695,20 @@ unsafe impl<'a, C: ConfigCore> SchemaRead<'a, C> for ShredVariant {
     }
 }
 
+/// Recover shreds from an erasure batch using Reed-Solomon coding.
+/// Exposes `merkle::recover` for external crates.
+pub fn recover(
+    shreds: Vec<Shred>,
+    reed_solomon_cache: &ReedSolomonCache,
+) -> Result<Box<dyn Iterator<Item = Result<Shred, Error>>>, Error> {
+    let merkle_shreds = shreds
+        .into_iter()
+        .map(merkle::Shred::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let recovered = merkle::recover(merkle_shreds, reed_solomon_cache)?;
+    Ok(Box::new(recovered.map(|r| r.map(Shred::from))))
+}
+
 pub fn max_ticks_per_n_shreds(num_shreds: u64, shred_data_size: Option<usize>) -> u64 {
     let ticks = create_ticks(1, 0, Hash::default());
     max_entries_per_n_shred(&ticks[0], num_shreds, shred_data_size)

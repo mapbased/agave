@@ -64,7 +64,7 @@ use {
 };
 
 mod obsolete_accounts;
-mod status_cache;
+pub mod status_cache;
 mod storage;
 mod tests;
 mod types;
@@ -72,16 +72,19 @@ mod utils;
 
 pub(crate) use {
     obsolete_accounts::{SerdeObsoleteAccounts, SerdeObsoleteAccountsMap},
-    status_cache::{deserialize_status_cache, serialize_status_cache},
-    storage::{SerializableAccountStorageEntry, SerializedAccountsFileId},
+    storage::SerializedAccountsFileId,
 };
+
+pub use storage::SerializableAccountStorageEntry;
+
+pub use status_cache::{deserialize_status_cache, serialize_status_cache};
 
 const MAX_STREAM_SIZE: usize = 32 * 1024 * 1024 * 1024;
 type MaxStreamSizeConfig = wincode::config::Configuration<true, MAX_STREAM_SIZE>;
 
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
 #[derive(Debug, Deserialize)]
-pub(crate) struct AccountsDbFields<T>(
+pub struct AccountsDbFields<T>(
     Vec<(Slot, SmallVec<[T; 1]>)>,
     u64, // unused, formerly write_version
     Slot,
@@ -456,7 +459,7 @@ pub struct ExtraFieldsToSerialize {
     pub block_id: Option<Hash>,
 }
 
-fn deserialize_bank_fields<R>(
+pub fn deserialize_bank_fields<R>(
     mut stream: &mut BufReader<R>,
 ) -> Result<
     (
