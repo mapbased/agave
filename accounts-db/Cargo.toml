@@ -41,7 +41,6 @@ agave-fs = { workspace = true }
 ahash = { workspace = true }
 blake3 = { workspace = true }
 bv = { workspace = true, features = ["serde"] }
-dashmap = { workspace = true, features = ["rayon", "raw-api"] }
 itertools = { workspace = true }
 log = { workspace = true }
 memmap2 = { workspace = true }
@@ -52,12 +51,14 @@ rand = { workspace = true }
 rayon = { workspace = true }
 seqlock = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
-smallvec = { workspace = true, features = ["const_generics"] }
 solana-account = { workspace = true, features = ["serde"] }
+solana-accounts-in-memory = { version = "4.1.0-beta.3", path = "../accounts-in-memory" }
 solana-address-lookup-table-interface = { workspace = true, features = [
     "bincode",
     "bytemuck",
 ] }
+dashmap = { workspace = true, features = ["rayon", "raw-api"] }
+smallvec = { workspace = true, features = ["const_generics"] }
 solana-bucket-map = { workspace = true }
 solana-clock = { workspace = true }
 solana-epoch-schedule = { workspace = true }

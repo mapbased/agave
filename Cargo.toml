@@ -4,6 +4,7 @@ members = [
     "account-decoder-client-types",
     "accounts-cluster-bench",
     "accounts-db",
+    "accounts-in-memory",
     "accounts-db/store-histogram",
     "banking-stage-ingress-types",
     "banks-client",
@@ -218,8 +219,6 @@ bincode = "1.3.3"
 bitflags = { version = "2.11.1" }
 bitvec = { version = "1.0.1", features = ["serde"] }
 blake3 = "1.8.5"
-blst = "0.3.16"
-blstrs = "0.7.1"
 borsh = { version = "1.6.1", features = ["derive", "unstable__schema"] }
 bs58 = { version = "0.5.1", default-features = false }
 bv = "0.11.1"
@@ -244,10 +243,8 @@ dashmap = "5.5.3"
 derive-where = "1.6.1"
 derive_more = { version = "2.1.1", features = ["full"] }
 dialoguer = "0.12.0"
-digest = "0.10.7"
 dirs-next = "2.0.0"
 dlopen2 = "0.8.2"
-dyn-clone = "1.0.20"
 eager = "0.1.0"
 ed25519-dalek = "=1.0.1"
 enum-iterator = "2.3.0"
@@ -263,9 +260,7 @@ futures-util = "0.3.29"
 gag = "1.0.0"
 gethostname = "1.1.0"
 goauth = "0.17.0"
-group = "0.13.0"
 hex = "0.4.3"
-hex-literal = "1.1.0"
 hidapi = { version = "2.6.5", default-features = false }
 histogram = "0.6.9"
 http = "1.4.0"
@@ -307,7 +302,6 @@ num-traits = "0.2"
 num_cpus = "1.17.0"
 num_enum = "0.7.6"
 openssl = "0.10"
-pairing = "0.23.0"
 parking_lot = "0.12"
 pem = "1.1.1"
 percentage = "0.1.0"
@@ -410,7 +404,6 @@ solana-fee-structure = "3.0.0"
 solana-file-download = "3.1.4"
 solana-frozen-abi = "3.3.0"
 solana-frozen-abi-macro = "3.3.0"
-solana-genesis = { path = "genesis", version = "=4.1.0-beta.3", features = ["agave-unstable-api"] }
 solana-genesis-config = "4.0.0"
 solana-genesis-utils = { path = "genesis-utils", version = "=4.1.0-beta.3", features = ["agave-unstable-api"] }
 solana-geyser-plugin-manager = { path = "geyser-plugin-manager", version = "=4.1.0-beta.3", features = ["agave-unstable-api"] }
@@ -431,7 +424,6 @@ solana-ledger = { path = "ledger", version = "=4.1.0-beta.3", features = ["agave
 solana-loader-v2-interface = "3.0.0"
 solana-loader-v3-interface = "7.0.0"
 solana-loader-v4-interface = "3.1.0"
-solana-local-cluster = { path = "local-cluster", version = "=4.1.0-beta.3", features = ["agave-unstable-api"] }
 solana-measure = { path = "measure", version = "=4.1.0-beta.3", features = ["agave-unstable-api"] }
 solana-merkle-tree = { path = "merkle-tree", version = "=4.1.0-beta.3", features = ["agave-unstable-api"] }
 solana-message = "4.1.1"
@@ -567,7 +559,6 @@ tonic = "0.14.6"
 tonic-prost = "0.14.5"
 tonic-prost-build = "0.14.5"
 tracing = "0.1"
-trait-set = "0.3.0"
 trees = "0.4.2"
 trezor-client = { version = "0.1.5", default-features = false, features = ["solana"] }
 tungstenite = "0.28.0"

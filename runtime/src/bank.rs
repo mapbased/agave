@@ -326,7 +326,7 @@ pub struct BankRc {
 }
 
 impl BankRc {
-    pub(crate) fn new(accounts: Accounts) -> Self {
+    pub fn new(accounts: Accounts) -> Self {
         Self {
             accounts: Arc::new(accounts),
             parent: RwLock::new(None),
@@ -1859,7 +1859,7 @@ impl Bank {
     }
 
     /// Create a bank from explicit arguments and deserialized fields from snapshot
-    pub(crate) fn new_from_snapshot(
+    pub fn new_from_snapshot(
         bank_rc: BankRc,
         genesis_config: &GenesisConfig,
         runtime_config: Arc<RuntimeConfig>,

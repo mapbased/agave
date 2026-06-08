@@ -6159,6 +6159,7 @@ dependencies = [
  "solana-account 4.3.0",
  "solana-account-decoder",
  "solana-accounts-db",
+ "solana-accounts-in-memory",
  "solana-address 2.6.0",
  "solana-address-lookup-table-interface",
  "solana-borsh",
@@ -6184,6 +6185,7 @@ dependencies = [
  "solana-inflation",
  "solana-keypair",
  "solana-lattice-hash",
+ "solana-leader-schedule",
  "solana-ledger",
  "solana-loader-v3-interface",
  "solana-measure",
@@ -7119,6 +7121,7 @@ dependencies = [
  "smallvec",
  "solana-account 4.3.0",
  "solana-accounts-db",
+ "solana-accounts-in-memory",
  "solana-address-lookup-table-interface",
  "solana-bucket-map",
  "solana-clock",
@@ -7161,6 +7164,27 @@ dependencies = [
  "test-case",
  "thiserror 2.0.18",
  "tikv-jemallocator",
+]
+
+[[package]]
+name = "solana-accounts-in-memory"
+version = "4.1.0-beta.3"
+dependencies = [
+ "art",
+ "blake3",
+ "dashmap 5.5.3",
+ "libc 0.2.186",
+ "log",
+ "lz4",
+ "modular-bitfield",
+ "rayon",
+ "smallvec",
+ "solana-account 4.3.0",
+ "solana-clock",
+ "solana-epoch-schedule",
+ "solana-lattice-hash",
+ "solana-pubkey 4.2.0",
+ "solana-sdk-ids",
 ]
 
 [[package]]
