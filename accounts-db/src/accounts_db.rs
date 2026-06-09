@@ -997,7 +997,7 @@ pub struct AccountsDb {
 
     // --- Added for InMemoryAccountsDb ---
     pub in_memory_db: &'static solana_accounts_in_memory::in_memory::InMemoryAccountsDb,
-    pub slot_caches: std::sync::RwLock<Vec<std::sync::Arc<solana_accounts_in_memory::slot_cache::SlotCache>>>,
+    pub slot_caches: Vec<std::sync::Arc<solana_accounts_in_memory::slot_cache::SlotCache>>,
     pub locator: solana_accounts_in_memory::locator::GlobalLocator,
 }
 
@@ -1165,7 +1165,7 @@ impl AccountsDb {
             latest_full_snapshot_slot: SeqLock::new(None),
             best_ancient_slots_to_shrink: RwLock::default(),
             in_memory_db: solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global(),
-            slot_caches: std::sync::RwLock::new((0..64).map(|_| std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new(0))).collect()),
+            slot_caches: (0..64).map(|_| std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new(0))).collect(),
             locator: solana_accounts_in_memory::locator::GlobalLocator::default(),
         };
 
@@ -3990,7 +3990,7 @@ impl AccountsDb {
             }
             if let Some(slot) = best_slot {
                 let cache_index = (slot % 64) as usize;
-                let acc_opt = self.slot_caches.read().unwrap()[cache_index].accounts.get(pubkey).map(|acc| acc.value().clone());
+                let acc_opt = self.slot_caches[cache_index].accounts.get(pubkey).map(|acc| acc.value().clone());
                 if let Some(acc) = acc_opt {
                     return Some((acc, slot));
                 }
@@ -4880,7 +4880,7 @@ impl AccountsDb {
     /// Return all of the accounts for a given slot
     pub fn get_pubkey_account_for_slot(&self, slot: Slot) -> Vec<(Pubkey, AccountSharedData)> {
         let cache_index = (slot % 64) as usize;
-        let caches = self.slot_caches.read().unwrap();
+        let caches = &self.slot_caches;
         let cache = &caches[cache_index];
         
         if cache.slot.load(Ordering::Acquire) == slot {
@@ -5363,7 +5363,7 @@ impl AccountsDb {
 
         let target_slot = accounts.target_slot();
         let cache_index = (target_slot % 64) as usize;
-        let caches = self.slot_caches.read().unwrap();
+        let caches = &self.slot_caches;
         let cache = &caches[cache_index];
         
         let mut current_slot = cache.slot.load(std::sync::atomic::Ordering::Acquire);
@@ -5381,6 +5381,7 @@ impl AccountsDb {
                 cache.is_frozen.store(false, Ordering::Release);
                 cache.is_rooted.store(false, Ordering::Release);
                 cache.slot.store(target_slot, std::sync::atomic::Ordering::Release);
+                self.locator.slot_index.update(target_slot);
                 break;
             }
             current_slot = cache.slot.load(std::sync::atomic::Ordering::Acquire);
@@ -5770,7 +5771,7 @@ impl AccountsDb {
         let mut cache_time = Measure::start("cache_add_root");
         
         let cache_index = (slot % 64) as usize;
-        let caches = self.slot_caches.read().unwrap();
+        let caches = &self.slot_caches;
         let cache = &caches[cache_index];
         
         if cache.slot.load(Ordering::Acquire) == slot {

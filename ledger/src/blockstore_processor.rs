@@ -632,7 +632,7 @@ pub fn process_entries_for_tests(
     transaction_status_sender: Option<&TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
 ) -> Result<()> {
-    let replay_tx_thread_pool = create_thread_pool(1);
+    let replay_tx_thread_pool = create_thread_pool(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8));
     let validate_and_hash_transaction = {
         let bank = bank.clone_with_scheduler();
         move |versioned_tx: VersionedTransaction,

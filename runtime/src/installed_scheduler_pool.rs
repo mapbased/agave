@@ -426,7 +426,7 @@ impl BankWithScheduler {
     /// Panics if `scheduler`'s scheduling context is unmatched to given bank or for scheduler
     /// preallocation.
     #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-    pub(crate) fn new(bank: Arc<Bank>, scheduler: Option<InstalledSchedulerBox>) -> Self {
+    pub fn new(bank: Arc<Bank>, scheduler: Option<InstalledSchedulerBox>) -> Self {
         // Avoid the fatal situation in which bank is being associated with a scheduler associated
         // to a different bank!
         if let Some(bank_in_context) = scheduler
