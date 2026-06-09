@@ -1165,7 +1165,7 @@ impl AccountsDb {
             latest_full_snapshot_slot: SeqLock::new(None),
             best_ancient_slots_to_shrink: RwLock::default(),
             in_memory_db: solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global(),
-            slot_caches: std::sync::RwLock::new((0..64).map(|i| std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new(i))).collect()),
+            slot_caches: std::sync::RwLock::new((0..64).map(|_| std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new(0))).collect()),
             locator: solana_accounts_in_memory::locator::GlobalLocator::default(),
         };
 
@@ -5366,11 +5366,28 @@ impl AccountsDb {
         let caches = self.slot_caches.read().unwrap();
         let cache = &caches[cache_index];
         
-        let current_slot = cache.slot.load(std::sync::atomic::Ordering::Acquire);
-        if current_slot != target_slot && current_slot != 0 {
-            // Wait, we shouldn't assert here in production, but if it differs it means the ring buffer wrapped around 
-            // without being rooted. For now we just update it.
-            cache.slot.store(target_slot, std::sync::atomic::Ordering::Release);
+        let mut current_slot = cache.slot.load(std::sync::atomic::Ordering::Acquire);
+        while current_slot != target_slot {
+            if cache.slot.compare_exchange_weak(
+                current_slot,
+                u64::MAX,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ).is_ok() {
+                if current_slot != 0 {
+                    log::warn!("Ring buffer wrapped around without being rooted! Overwriting slot {} with {}", current_slot, target_slot);
+                }
+                cache.accounts.clear();
+                cache.is_frozen.store(false, Ordering::Release);
+                cache.is_rooted.store(false, Ordering::Release);
+                cache.slot.store(target_slot, std::sync::atomic::Ordering::Release);
+                break;
+            }
+            current_slot = cache.slot.load(std::sync::atomic::Ordering::Acquire);
+            if current_slot == u64::MAX {
+                std::hint::spin_loop();
+                current_slot = cache.slot.load(std::sync::atomic::Ordering::Acquire);
+            }
         }
 
         for i in 0..accounts.len() {
@@ -5764,13 +5781,21 @@ impl AccountsDb {
                 let account = entry.value();
                 let account_id = self.in_memory_db.get_or_register_id(pubkey, &ebr);
                 
+                let account_full = solana_account::Account {
+                    lamports: account.lamports(),
+                    data: account.data().to_vec(),
+                    owner: *account.owner(),
+                    executable: account.executable(),
+                    rent_epoch: account.rent_epoch(),
+                };
+                
                 // Construct Meta16B and store raw
                 // Or simply use `store` which does compression and flags automatically
                 unsafe {
                     self.in_memory_db.store(
                         account_id,
                         true, // exist: true (it will safely handle replacing old)
-                        &account.clone().into(),
+                        &account_full,
                         &ebr,
                     );
                 }
