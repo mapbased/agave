@@ -1165,7 +1165,7 @@ impl AccountsDb {
             latest_full_snapshot_slot: SeqLock::new(None),
             best_ancient_slots_to_shrink: RwLock::default(),
             in_memory_db: solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global(),
-            slot_caches: (0..64).map(|_| std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new(0))).collect(),
+            slot_caches: (0..512).map(|_| std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new(0))).collect(),
             locator: solana_accounts_in_memory::locator::GlobalLocator::default(),
         };
 
@@ -3975,13 +3975,14 @@ impl AccountsDb {
         _populate_read_cache: PopulateReadCache,
     ) -> Option<(AccountSharedData, Slot)> {
         // 1. Try to find the latest unrooted account in Ancestors using Locator
-        if let Some(bitset) = self.locator.get_bitset(pubkey) {
+        if let Some(bitsets) = self.locator.get_bitset(pubkey) {
             let mut best_slot = None;
             for slot in &ancestors.keys() {
-                let bit = 1_u64 << (slot % 64);
-                if bitset & bit != 0 {
+                let idx = ((slot % 512) / 64) as usize;
+                let bit = 1_u64 << ((slot % 512) % 64);
+                if bitsets[idx] & bit != 0 {
                     if best_slot.map_or(true, |best| *slot > best) {
-                        let cache_index = (slot % 64) as usize;
+                        let cache_index = (slot % 512) as usize;
                         if self.locator.slot_index.get_slot(cache_index) == Some(*slot) {
                             best_slot = Some(*slot);
                         }
@@ -3989,7 +3990,7 @@ impl AccountsDb {
                 }
             }
             if let Some(slot) = best_slot {
-                let cache_index = (slot % 64) as usize;
+                let cache_index = (slot % 512) as usize;
                 let acc_opt = self.slot_caches[cache_index].accounts.get(pubkey).map(|acc| acc.value().clone());
                 if let Some(acc) = acc_opt {
                     return Some((acc, slot));
@@ -4120,6 +4121,15 @@ impl AccountsDb {
         let mut num_cached_slots_removed = 0;
         let mut total_removed_cached_bytes = 0;
         for remove_slot in removed_slots {
+            let cache_index = (*remove_slot % 512) as usize;
+            let cache = &self.slot_caches[cache_index];
+            if cache.slot.load(Ordering::Acquire) == *remove_slot {
+                for entry in cache.accounts.iter() {
+                    self.locator.remove(entry.key(), *remove_slot);
+                }
+                cache.clear(0);
+            }
+
             // This function is only currently safe with respect to `flush_slot_cache()` because
             // both functions run serially in AccountsBackgroundService.
             let mut remove_cache_elapsed = Measure::start("remove_cache_elapsed");
@@ -4879,7 +4889,7 @@ impl AccountsDb {
 
     /// Return all of the accounts for a given slot
     pub fn get_pubkey_account_for_slot(&self, slot: Slot) -> Vec<(Pubkey, AccountSharedData)> {
-        let cache_index = (slot % 64) as usize;
+        let cache_index = (slot % 512) as usize;
         let caches = &self.slot_caches;
         let cache = &caches[cache_index];
         
@@ -5362,7 +5372,7 @@ impl AccountsDb {
         }
 
         let target_slot = accounts.target_slot();
-        let cache_index = (target_slot % 64) as usize;
+        let cache_index = (target_slot % 512) as usize;
         let caches = &self.slot_caches;
         let cache = &caches[cache_index];
         
@@ -5376,6 +5386,10 @@ impl AccountsDb {
             ).is_ok() {
                 if current_slot != 0 {
                     log::warn!("Ring buffer wrapped around without being rooted! Overwriting slot {} with {}", current_slot, target_slot);
+                    // Critical fix: Remove all accounts from GlobalLocator that were in the old slot
+                    for entry in cache.accounts.iter() {
+                        self.locator.remove(entry.key(), current_slot);
+                    }
                 }
                 cache.accounts.clear();
                 cache.is_frozen.store(false, Ordering::Release);
@@ -5770,7 +5784,7 @@ impl AccountsDb {
     pub fn add_root(&self, slot: Slot) -> AccountsAddRootTiming {
         let mut cache_time = Measure::start("cache_add_root");
         
-        let cache_index = (slot % 64) as usize;
+        let cache_index = (slot % 512) as usize;
         let caches = &self.slot_caches;
         let cache = &caches[cache_index];
         
