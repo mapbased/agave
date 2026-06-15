@@ -1746,18 +1746,11 @@ impl AccountsDb {
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
     pub fn clean_accounts(&self, max_clean_root_inclusive: Option<Slot>, is_startup: bool) {
-        if self.exhaustively_verify_refcounts {
-            //at startup use all cores to verify refcounts
-            if is_startup {
-                self.exhaustively_verify_refcounts(max_clean_root_inclusive);
-            } else {
-                // otherwise, use the background thread pool
-                self.thread_pool_background
-                    .install(|| self.exhaustively_verify_refcounts(max_clean_root_inclusive));
-            }
-        }
+        // [In-Memory Accounts DB] Short-circuited.
+        // Legacy accounts cleaning is completely bypassed because InMemoryAccountsDb 
+        // does not use AccountsIndex or AppendVec.
+        return;
 
-        let _guard = self.active_stats.activate(ActiveStatItem::Clean);
 
         let purges_old_accounts_count = AtomicU64::default();
 
@@ -3157,9 +3150,12 @@ impl AccountsDb {
         ancient_slots
     }
 
+    pub fn shrink_ancient_slots(&self, epoch_schedule: &EpochSchedule) {
+
+    }
     /// get a sorted list of slots older than an epoch
     /// squash those slots into ancient append vecs
-    pub fn shrink_ancient_slots(&self, epoch_schedule: &EpochSchedule) {
+    pub fn shrink_ancient_slots_old(&self, epoch_schedule: &EpochSchedule) {
         if self.ancient_append_vec_offset.is_none() {
             return;
         }
@@ -3224,6 +3220,10 @@ impl AccountsDb {
     }
 
     pub fn shrink_candidate_slots(&self, epoch_schedule: &EpochSchedule) -> usize {
+        return 0
+    }
+
+        pub fn shrink_candidate_slots_old(&self, epoch_schedule: &EpochSchedule) -> usize {
         let oldest_non_ancient_slot = self.get_oldest_non_ancient_slot(epoch_schedule);
 
         let shrink_candidates_slots =
@@ -4167,41 +4167,10 @@ impl AccountsDb {
         removed_slots: impl Iterator<Item = &'a Slot> + Clone,
         purge_stats: &PurgeStats,
     ) {
-        let mut remove_cache_elapsed_across_slots = 0;
+
         let mut num_cached_slots_removed = 0;
         let mut total_removed_cached_bytes = 0;
-        for remove_slot in removed_slots {
-            // Purge from our ring-buffer SlotCache + GlobalLocator
-            // self.purge_slot_from_cache(*remove_slot);
 
-            // This function is only currently safe with respect to `flush_slot_cache()` because
-            // both functions run serially in AccountsBackgroundService.
-            let mut remove_cache_elapsed = Measure::start("remove_cache_elapsed");
-            // Note: we cannot remove this slot from the slot cache until we've removed its
-            // entries from the accounts index first. This is because `scan_accounts()` relies on
-            // holding the index lock, finding the index entry, and then looking up the entry
-            // in the cache. If it fails to find that entry, it will panic in `get_loaded_account()`
-            if let Some(slot_cache) = self.accounts_cache.slot_cache(*remove_slot) {
-                // If the slot is still in the cache, remove the backing storages for
-                // the slot and from the Accounts Index
-                num_cached_slots_removed += 1;
-                total_removed_cached_bytes += slot_cache.total_bytes();
-                self.purge_slot_cache(*remove_slot, &slot_cache);
-                remove_cache_elapsed.stop();
-                remove_cache_elapsed_across_slots += remove_cache_elapsed.as_us();
-                // Nobody else should have removed the slot cache entry yet
-                assert!(self.accounts_cache.remove_slot(*remove_slot).is_some());
-            } else {
-                self.purge_slot_storage(*remove_slot, purge_stats);
-            }
-            // It should not be possible that a slot is neither in the cache or storage. Even in
-            // a slot with all ticks, `Bank::new_from_parent()` immediately stores some sysvars
-            // on bank creation.
-        }
-
-        purge_stats
-            .remove_cache_elapsed
-            .fetch_add(remove_cache_elapsed_across_slots, Ordering::Relaxed);
         purge_stats
             .num_cached_slots_removed
             .fetch_add(num_cached_slots_removed, Ordering::Relaxed);
@@ -4499,6 +4468,12 @@ impl AccountsDb {
     // `force_flush` flushes all the cached roots `<= requested_flush_root`. It also then
     // flushes excess remaining rooted slots while 'should_aggressively_flush_cache' is true
     pub fn flush_accounts_cache(&self, force_flush: bool, requested_flush_root: Option<Slot>) {
+        // [In-Memory Accounts DB] Short-circuited.
+        // The old accounts cache is bypassed, so flushing it is a no-op.
+        // Background flushing is handled autonomously by agave-locator-flusher thread.
+        return;
+    }
+    pub fn flush_accounts_cache_old(&self, force_flush: bool, requested_flush_root: Option<Slot>) {
         #[cfg(not(test))]
         assert!(requested_flush_root.is_some());
 
