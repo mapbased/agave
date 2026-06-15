@@ -997,7 +997,6 @@ pub struct AccountsDb {
 
     // --- Added for InMemoryAccountsDb ---
     pub in_memory_db: &'static solana_accounts_in_memory::in_memory::InMemoryAccountsDb,
-    pub slot_caches: Vec<std::sync::Arc<solana_accounts_in_memory::slot_cache::SlotCache>>,
     pub locator: solana_accounts_in_memory::locator::GlobalLocator,
 }
 
@@ -1165,12 +1164,9 @@ impl AccountsDb {
             latest_full_snapshot_slot: SeqLock::new(None),
             best_ancient_slots_to_shrink: RwLock::default(),
             in_memory_db: solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global(),
-            slot_caches: (0..solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE)
-                .map(|_| {
-                    std::sync::Arc::new(solana_accounts_in_memory::slot_cache::SlotCache::new())
-                })
-                .collect(),
-            locator: solana_accounts_in_memory::locator::GlobalLocator::default(),
+            locator: solana_accounts_in_memory::locator::GlobalLocator::new(
+                solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global()
+            ),
         };
 
         {
@@ -3994,7 +3990,7 @@ impl AccountsDb {
                 if populate_read_cache == PopulateReadCache::True {
                     // ★ Read-cache penetration: cache into current slot (Arc::clone, zero-copy)
                     let cache_index = (current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-                    let cache = &self.slot_caches[cache_index];
+                    let cache = &self.locator.slot_caches[cache_index];
                     if cache.slot.load(Ordering::Acquire) == current_slot {
                         if cache.try_cache(
                             account_index,
@@ -4008,7 +4004,7 @@ impl AccountsDb {
                             // Set locator bit for current slot (may already be set if written)
                             arc_bitset.bits[((current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize]
                                 .fetch_or(1u64 << ((current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64), Ordering::AcqRel);
-                            self.locator.slot_index.update(current_slot);
+                            
                         }
                     }
                 }
@@ -4033,7 +4029,7 @@ impl AccountsDb {
         if populate_read_cache == PopulateReadCache::True {
             // Cache ART-tree result into current slot if the slot cache is active
             let cache_index = (current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-            let cache = &self.slot_caches[cache_index];
+            let cache = &self.locator.slot_caches[cache_index];
             if cache.slot.load(Ordering::Acquire) == current_slot {
                 let ebr = self.in_memory_db.ebr.enter();
                 let account_index = self.in_memory_db.get_or_register_id(pubkey, &ebr);
@@ -4484,7 +4480,7 @@ impl AccountsDb {
         self.accounts_cache.report_size();
 
         // Also update the new ring-buffer SlotCache state machine
-        let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
+        let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
         if cache.slot.load(Ordering::Acquire) == slot {
             cache.mark_frozen();
         }
@@ -4926,7 +4922,7 @@ impl AccountsDb {
     /// Returns all of the accounts' pubkeys for a given slot
     pub fn get_pubkeys_for_slot(&self, slot: Slot) -> Vec<Pubkey> {
         let cache_index = (slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-        let cache = &self.slot_caches[cache_index];
+        let cache = &self.locator.slot_caches[cache_index];
 
         if cache.slot.load(Ordering::Acquire) == slot {
             let mut result = Vec::new();
@@ -4949,7 +4945,7 @@ impl AccountsDb {
     /// Return all of the accounts for a given slot
     pub fn get_pubkey_account_for_slot(&self, slot: Slot) -> Vec<(Pubkey, AccountSharedData)> {
         let cache_index = (slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-        let cache = &self.slot_caches[cache_index];
+        let cache = &self.locator.slot_caches[cache_index];
 
         if cache.slot.load(Ordering::Acquire) == slot {
             let mut result = Vec::new();
@@ -5448,7 +5444,7 @@ impl AccountsDb {
 
         let target_slot = accounts.target_slot();
         let cache_index = (target_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-        let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.slot_caches[cache_index];
+        let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[cache_index];
 
         // ── Acquire the ring-buffer slot (with deferred write-out if needed) ──
 
@@ -5459,17 +5455,17 @@ impl AccountsDb {
             match cache.state.compare_exchange(SLOT_FREE,SLOT_ACTIVE,Ordering::AcqRel, Ordering::Acquire) {
                 Ok(x) =>{
                     cache.slot.store(target_slot, Ordering::Relaxed);
-                    self.locator.slot_index.update(target_slot);
+                    
                 }
                 Err(SLOT_ROOT)=>{
                     // todo 使用一个线程持续往外写，直到达到水位线10个slot
                     self.flush_slot(current_slot, cache);
-                    cache.clear_for_reuse( &self.locator,&self.in_memory_db.pubkey_registry);
+                    cache.clear_for_reuse(&self.locator);
                     cache.state.store( SLOT_ACTIVE,
                         Ordering::Release,
                     );
                     cache.slot.store(target_slot, Ordering::Release);
-                    self.locator.slot_index.update(target_slot);
+                    
                 }
                 Err( x)=>{
                     panic!("last slot is not rooted!:{}",x);
@@ -5920,7 +5916,7 @@ impl AccountsDb {
     pub fn add_root(&self, slot: Slot) -> AccountsAddRootTiming {
         use solana_accounts_in_memory::slot_cache::SLOT_ROOTED;
 
-        let cache = &self.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
+        let cache = &self.locator.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
         let cur_slot=cache.slot.load(Ordering::Acquire) ;
         if cur_slot!= slot  &&cur_slot!=0{
           panic!("slot to root not found in ring cache expect {} found {}",slot ,cur_slot);
@@ -5966,8 +5962,9 @@ impl AccountsDb {
                 word &= !(1_u64 << bit_pos); // clear the bit
 
                 let cache_index = i * 64 + bit_pos;
-                if let Some(slot) = self.locator.slot_index.get_slot(cache_index) {
-                    let cache = &self.slot_caches[cache_index];
+                let slot = self.locator.slot_caches[cache_index].slot.load(std::sync::atomic::Ordering::Acquire);
+                if slot != 0 {
+                    let cache = &self.locator.slot_caches[cache_index];
                     if cache.slot.load(Ordering::Acquire) == slot {
                         let is_rooted = cache.is_rooted();
                         //  let is_rooted = cache.state.load(Ordering::Acquire) == SLOT_ROOTED;
@@ -6041,7 +6038,7 @@ impl AccountsDb {
         use solana_accounts_in_memory::slot_cache::SLOT_FREE;
 
         let idx = (slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-        let cache = &self.slot_caches[idx];
+        let cache = &self.locator.slot_caches[idx];
 
         // CAS: slot → u64::MAX to claim exclusive cleanup
         if cache
@@ -6054,7 +6051,7 @@ impl AccountsDb {
 
         // Clear locator bits (don't write to ART-tree — fork data is discarded)
         self.clear_locator_bits(slot, cache);
-        cache.clear_for_reuse( &self.locator,&self.in_memory_db.pubkey_registry);
+        cache.clear_for_reuse(&self.locator);
         cache.state.store(SLOT_FREE, Ordering::Release);
         cache.slot.store(0, Ordering::Release);
     }
@@ -6071,7 +6068,7 @@ impl AccountsDb {
             //     break;
             // }
             let prev_idx = (prev_slot_candidate % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-            let prev_cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.slot_caches[prev_idx];
+            let prev_cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[prev_idx];
             let prev_stored = prev_cache.slot.load(Ordering::Acquire);
 
             if prev_stored != prev_slot_candidate {
@@ -6085,7 +6082,7 @@ impl AccountsDb {
                     bag.bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
                     //todo: remove pubkey from big hashmap if all bit is 0
                 });
-                prev_cache.clear_for_reuse( &self.locator,  &self.in_memory_db.pubkey_registry);
+                prev_cache.clear_for_reuse(&self.locator);
                 prev_cache.state.store(SLOT_FREE, Ordering::Release);
 
 
@@ -6109,7 +6106,7 @@ impl AccountsDb {
         cache.for_each_bag(|bag| {
             let account_index = bag.bitset.account_index;
             if let Some(prev_slot) = self.locator.scan_bitset_backward(&bag.bitset, slot) {
-                let prev_cache = &self.slot_caches[(prev_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
+                let prev_cache = &self.locator.slot_caches[(prev_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
                 if prev_cache.slot.load(Ordering::Acquire) == prev_slot {
                     if prev_cache.state.load(Ordering::Acquire)
                         == solana_accounts_in_memory::slot_cache::SLOT_ROOTED
