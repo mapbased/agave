@@ -997,7 +997,7 @@ pub struct AccountsDb {
 
     // --- Added for InMemoryAccountsDb ---
     pub in_memory_db: &'static solana_accounts_in_memory::in_memory::InMemoryAccountsDb,
-    pub locator: solana_accounts_in_memory::locator::GlobalLocator,
+    pub locator: std::sync::Arc<solana_accounts_in_memory::locator::GlobalLocator>,
 }
 
 pub fn quarter_thread_count() -> usize {
@@ -5448,35 +5448,47 @@ impl AccountsDb {
 
         // ── Acquire the ring-buffer slot (with deferred write-out if needed) ──
 
+        self.locator.highest_active_slot.fetch_max(target_slot, Ordering::Release);
+        
         let mut current_slot=cache.slot.load(Ordering::Acquire);
         while current_slot != target_slot {
 
-
-            match cache.state.compare_exchange(SLOT_FREE,SLOT_ACTIVE,Ordering::AcqRel, Ordering::Acquire) {
-                Ok(x) =>{
+            match cache.state.compare_exchange(solana_accounts_in_memory::slot_cache::SLOT_FREE, solana_accounts_in_memory::slot_cache::SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) =>{
                     cache.slot.store(target_slot, Ordering::Relaxed);
-                    
+                    break;
                 }
-                Err(SLOT_ROOT)=>{
-                    // todo 使用一个线程持续往外写，直到达到水位线10个slot
-                    self.flush_slot(current_slot, cache);
-                    cache.clear_for_reuse(&self.locator);
-                    cache.state.store( SLOT_ACTIVE,
-                        Ordering::Release,
-                    );
-                    cache.slot.store(target_slot, Ordering::Release);
-                    
+                Err(state)=>{
+                    if state == solana_accounts_in_memory::slot_cache::SLOT_ROOTED {
+                        // Background thread is supposed to flush this, but we hit the watermark wall!
+                        // Back-pressure: we claim it and flush it ourselves.
+                        if cache.state.compare_exchange(
+                            solana_accounts_in_memory::slot_cache::SLOT_ROOTED,
+                            solana_accounts_in_memory::slot_cache::SLOT_CLAIMING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire
+                        ).is_ok() {
+                            self.locator.flush_slot(current_slot, cache);
+                            cache.clear_for_reuse(&self.locator);
+                            cache.state.store(solana_accounts_in_memory::slot_cache::SLOT_ACTIVE, Ordering::Release);
+                            cache.slot.store(target_slot, Ordering::Release);
+                            break;
+                        }
+                    } else if state == solana_accounts_in_memory::slot_cache::SLOT_CLAIMING {
+                        // Background thread is currently flushing this slot.
+                        // Spin and wait until it becomes FREE.
+                        std::hint::spin_loop();
+                    } else if state == solana_accounts_in_memory::slot_cache::SLOT_ACTIVE || state == solana_accounts_in_memory::slot_cache::SLOT_FROZEN {
+                        // We caught up to a slot that is currently active or frozen (being used by foreground).
+                        // This means the entire ring buffer is full of active transactions!
+                        std::hint::spin_loop();
+                    } else {
+                        panic!("unexpected slot state: {}", state);
+                    }
                 }
-                Err( x)=>{
-                    panic!("last slot is not rooted!:{}",x);
-
-
-                }
-
-
             }
 
-            // Another thread is cleaning (slot == u64::MAX), spin until done
+            // Spin wait until slot matches or becomes available
             std::hint::spin_loop();
             current_slot = cache.slot.load(Ordering::Acquire);
         }
@@ -5989,35 +6001,6 @@ impl AccountsDb {
     /// Write out all `is_modified == true` accounts from a SlotCache to the ART-tree,
     /// then clear the locator bits for that slot.
     /// Called during ring-buffer slot reuse (store_accounts_unfrozen) for ROOTED slots.
-    fn flush_slot(&self, slot: Slot, cache: &solana_accounts_in_memory::slot_cache::SlotCache) {
-        let ebr = self.in_memory_db.ebr.enter();
-        let word = ((slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize;
-        let bit = 1u64 << ((slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
-
-        cache.for_each_bag(|bag| {
-            let account_index = bag.bitset.account_index;
-
-            // ★ Only write out is_modified == true accounts (Write Coalescing benefit)
-            if bag.is_modified.load(Ordering::Acquire) {
-                let account = &bag.account;
-                let account_full = solana_account::Account {
-                    lamports: account.lamports(),
-                    data: account.data().to_vec(),
-                    owner: *account.owner(),
-                    executable: account.executable(),
-                    rent_epoch: account.rent_epoch(),
-                };
-                unsafe {
-                    self.in_memory_db
-                        .store(account_index, true, &account_full, &ebr);
-                }
-            }
-
-            // Clear locator bit for this slot
-            bag.bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
-        });
-    }
-
     /// Clear locator bits for all accounts in a slot's cache (without writing to ART-tree).
     /// Used for non-rooted slots (fork data or implicit purge).
     fn clear_locator_bits(
