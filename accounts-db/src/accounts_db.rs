@@ -5464,7 +5464,7 @@ impl AccountsDb {
                 Err(SLOT_ROOT)=>{
                     // todo 使用一个线程持续往外写，直到达到水位线10个slot
                     self.flush_slot(current_slot, cache);
-                    cache.clear_for_reuse();
+                    cache.clear_for_reuse( &self.locator,&self.in_memory_db.pubkey_registry);
                     cache.state.store( SLOT_ACTIVE,
                         Ordering::Release,
                     );
@@ -5923,9 +5923,10 @@ impl AccountsDb {
         let cache = &self.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
         let cur_slot=cache.slot.load(Ordering::Acquire) ;
         if cur_slot!= slot  &&cur_slot!=0{
-          panic!("slot to root not found in ringcache expect {} found {}",slot ,cur_slot);
+          panic!("slot to root not found in ring cache expect {} found {}",slot ,cur_slot);
         }
         cache.state.store(SLOT_ROOTED, Ordering::Release);
+        debug!("slot rooted :{}",slot);
 
         // ═══ Phase 1: Forward scan — clean fork (non-rooted) slots ═══
         self.cleanup_fork_slots(slot);
@@ -6053,7 +6054,7 @@ impl AccountsDb {
 
         // Clear locator bits (don't write to ART-tree — fork data is discarded)
         self.clear_locator_bits(slot, cache);
-        cache.clear_for_reuse();
+        cache.clear_for_reuse( &self.locator,&self.in_memory_db.pubkey_registry);
         cache.state.store(SLOT_FREE, Ordering::Release);
         cache.slot.store(0, Ordering::Release);
     }
@@ -6084,7 +6085,7 @@ impl AccountsDb {
                     bag.bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
                     //todo: remove pubkey from big hashmap if all bit is 0
                 });
-                prev_cache.clear_for_reuse();
+                prev_cache.clear_for_reuse( &self.locator,  &self.in_memory_db.pubkey_registry);
                 prev_cache.state.store(SLOT_FREE, Ordering::Release);
 
 
