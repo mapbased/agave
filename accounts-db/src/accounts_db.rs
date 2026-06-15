@@ -3985,7 +3985,7 @@ impl AccountsDb {
         if let Some((arc_bitset, account_index)) = self.locator.get_with_index(pubkey) {
             // find_in_caches: scan bitset for the best (highest) ancestor slot that has this account
             if let Some((found_slot, arc_account)) =
-                self.find_in_caches(&arc_bitset, account_index, ancestors)
+                self.find_in_caches(&arc_bitset, account_index, ancestors, current_slot)
             {
                 if populate_read_cache == PopulateReadCache::True {
                     // ★ Read-cache penetration: cache into current slot (Arc::clone, zero-copy)
@@ -5934,43 +5934,38 @@ impl AccountsDb {
         bitset: &solana_accounts_in_memory::locator::AccountBitset,
         account_index: u32,
         ancestors: &Ancestors,
+        current_slot: Slot,
     ) -> Option<(Slot, std::sync::Arc<AccountSharedData>)> {
-        use solana_accounts_in_memory::slot_cache::SLOT_ROOTED;
-        let mut best_slot: Option<Slot> = None;
-        let mut best_account: Option<std::sync::Arc<AccountSharedData>> = None;
+        let bitset_size = solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as usize;
+        let start_pos = (current_slot as usize) % bitset_size;
 
-        // We must check all bits because `ancestors` only contains the path
-        // from the current bank down to the *most recent root*. Rooted slots older
-        // than the most recent root are dropped from `ancestors` during `squash()`.
-        for i in 0.. solana_accounts_in_memory::locator::LOCATOR_BITSET_WORDS {
-            let mut word = bitset.bits[i].load(Ordering::Acquire);
-            while word != 0 {
-                let bit_pos = word.trailing_zeros() as usize;
-                word &= !(1_u64 << bit_pos); // clear the bit
+        for offset in 0..bitset_size {
+            let pos = (start_pos + bitset_size - offset) % bitset_size;
+            let word = pos / 64;
+            let bit = pos % 64;
 
-                let cache_index = i * 64 + bit_pos;
-                let slot = self.locator.slot_caches[cache_index].slot.load(std::sync::atomic::Ordering::Acquire);
-                if slot != 0 {
-                    let cache = &self.locator.slot_caches[cache_index];
+            if bitset.bits[word].load(Ordering::Acquire) & (1_u64 << bit) != 0 {
+                let cache = &self.locator.slot_caches[pos];
+                let slot = cache.slot.load(Ordering::Acquire);
+                
+                // Only consider slots that are valid and <= current_slot
+                if slot != 0 && slot <= current_slot {
                     if cache.slot.load(Ordering::Acquire) == slot {
                         let is_rooted = cache.is_rooted();
-                        //  let is_rooted = cache.state.load(Ordering::Acquire) == SLOT_ROOTED;
                         if ancestors.contains_key(&slot) || is_rooted {
-                            if best_slot.map_or(true, |best| slot > best) {
-                                if let Some(arc_acc) = cache.with_bag(account_index, |bag| {
-                                    std::sync::Arc::clone(&bag.account)
-                                }) {
-                                    best_slot = Some(slot);
-                                    best_account = Some(arc_acc);
-                                }
+                            if let Some(arc_acc) = cache.with_bag(account_index, |bag| {
+                                std::sync::Arc::clone(&bag.account)
+                            }) {
+                                // Since we scan backward from current_slot, the first match 
+                                // we find is guaranteed to be the highest valid ancestor slot.
+                                return Some((slot, arc_acc));
                             }
                         }
                     }
                 }
             }
         }
-
-        best_slot.map(|s| (s, best_account.unwrap()))
+        None
     }
 
     /// Write out all `is_modified == true` accounts from a SlotCache to the ART-tree,
