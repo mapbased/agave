@@ -5428,7 +5428,7 @@ impl AccountsDb {
         let mut current_slot=cache.slot.load(Ordering::Acquire);
         while current_slot != target_slot {
 
-            match cache.state.compare_exchange(solana_accounts_in_memory::slot_cache::SLOT_FREE, solana_accounts_in_memory::slot_cache::SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
+            match cache.state.compare_exchange( SLOT_FREE, SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) =>{
                     cache.slot.store(target_slot, Ordering::Relaxed);
                     break;
@@ -5445,15 +5445,16 @@ impl AccountsDb {
                         ).is_ok() {
                             self.locator.flush_slot(current_slot, cache);
                             cache.clear_for_reuse(&self.locator);
-                            cache.state.store(solana_accounts_in_memory::slot_cache::SLOT_ACTIVE, Ordering::Release);
                             cache.slot.store(target_slot, Ordering::Release);
+                            cache.state.store( SLOT_ACTIVE, Ordering::Release);
+
                             break;
                         }
                     } else if state == solana_accounts_in_memory::slot_cache::SLOT_CLAIMING {
                         // Background thread is currently flushing this slot.
                         // Spin and wait until it becomes FREE.
                         std::hint::spin_loop();
-                    } else if state == solana_accounts_in_memory::slot_cache::SLOT_ACTIVE || state == solana_accounts_in_memory::slot_cache::SLOT_FROZEN {
+                    } else if state ==  SLOT_ACTIVE || state == solana_accounts_in_memory::slot_cache::SLOT_FROZEN {
                         // We caught up to a slot that is currently active or frozen (being used by foreground).
                         // This means the entire ring buffer is full of active transactions!
                         std::hint::spin_loop();
@@ -6028,6 +6029,9 @@ impl AccountsDb {
                 break;
             } // Newer slot occupies this position, keep going!
             let prev_state=prev_cache.state.load(Ordering::Acquire);
+            if prev_state>=SLOT_ROOTED{
+                break;
+            }
             if  prev_state== SLOT_FROZEN ||prev_state ==SLOT_ACTIVE {
                 let word = ((prev_stored % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize;
                 let bit = 1u64 << ((prev_stored % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
@@ -6041,7 +6045,7 @@ impl AccountsDb {
 
 
             } else {
-                break;
+                continue;
             }
 
         }
