@@ -6025,7 +6025,7 @@ impl AccountsDb {
             let prev_cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[prev_idx];
             let prev_stored = prev_cache.slot.load(Ordering::Acquire);
 
-            if prev_stored != prev_slot_candidate {
+            if prev_stored > prev_slot_candidate {
                 break;
             } // Newer slot occupies this position, keep going!
             let prev_state=prev_cache.state.load(Ordering::Acquire);
