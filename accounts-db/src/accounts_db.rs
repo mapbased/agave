@@ -6037,7 +6037,7 @@ impl AccountsDb {
                 let bit = 1u64 << ((prev_stored % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
                 prev_cache.for_each_bag(|bag| {
                     bag.bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
-                    //todo: remove pubkey from big hashmap if all bit is 0
+
                 });
                 prev_cache.clear_for_reuse(&self.locator);
                 prev_cache.state.store(SLOT_FREE, Ordering::Release);
