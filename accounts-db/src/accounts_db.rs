@@ -4002,8 +4002,7 @@ impl AccountsDb {
                             current_slot,
                         ) {
                             // Set locator bit for current slot (may already be set if written)
-                            arc_bitset.bits[((current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize]
-                                .fetch_or(1u64 << ((current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64), Ordering::AcqRel);
+                            arc_bitset.set_bit(current_slot, Ordering::AcqRel);
                             
                         }
                     }
@@ -4045,9 +4044,7 @@ impl AccountsDb {
                     current_slot,
                 ) {
                     // If it was purged, clear the locator bit
-                    let word = ((current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize;
-                    let bit = 1u64 << ((current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
-                    arc_bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
+                    arc_bitset.clear_bit(current_slot, Ordering::AcqRel);
                 }
             }
         }
@@ -5486,9 +5483,7 @@ impl AccountsDb {
                     },
                     target_slot,
                 ) {
-                    let word = ((target_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize;
-                    let bit = 1u64 << ((target_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
-                    bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
+                    bitset.clear_bit(target_slot, Ordering::AcqRel);
                 }
             });
         }
@@ -5930,6 +5925,11 @@ impl AccountsDb {
 
     /// Scan the bitset for the best (highest) ancestor slot that holds this account.
     /// Returns `(slot, Arc<AccountSharedData>)` if found.
+    ///
+    /// O(1) per set bit via [`iter_set_bits_backward`]: positions are visited in decreasing
+    /// slot order (current_slot first, then ancestors), so the first valid match is the
+    /// highest ancestor. Invalid candidates (wrong slot / not ancestor-or-rooted / bag
+    /// missing) are simply skipped.
     fn find_in_caches(
         &self,
         bitset: &solana_accounts_in_memory::locator::AccountBitset,
@@ -5937,31 +5937,26 @@ impl AccountsDb {
         ancestors: &Ancestors,
         current_slot: Slot,
     ) -> Option<(Slot, std::sync::Arc<AccountSharedData>)> {
-        let bitset_size = solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as usize;
-        let start_pos = (current_slot as usize) % bitset_size;
+        for pos in solana_accounts_in_memory::locator::iter_set_bits_backward(
+            bitset.load_bits(Ordering::Acquire),
+            current_slot,
+        ) {
+            let cache = &self.locator.slot_caches[pos];
+            let slot = cache.slot.load(Ordering::Acquire);
 
-        for offset in 0..bitset_size {
-            let pos = (start_pos + bitset_size - offset) % bitset_size;
-            let word = pos / 64;
-            let bit = pos % 64;
-
-            if bitset.bits[word].load(Ordering::Acquire) & (1_u64 << bit) != 0 {
-                let cache = &self.locator.slot_caches[pos];
-                let slot = cache.slot.load(Ordering::Acquire);
-                
-                // Only consider slots that are valid and <= current_slot
-                if slot != 0 && slot <= current_slot {
-                    if cache.slot.load(Ordering::Acquire) == slot {
-                        let is_rooted = cache.is_rooted();
-                        if ancestors.contains_key(&slot) || is_rooted {
-                            if let Some(arc_acc) = cache.with_bag(account_index, |bag| {
-                                std::sync::Arc::clone(&bag.account)
-                            }) {
-                                // Since we scan backward from current_slot, the first match 
-                                // we find is guaranteed to be the highest valid ancestor slot.
-                                return Some((slot, arc_acc));
-                            }
-                        }
+            // Only consider slots that are valid and <= current_slot
+            if slot != 0
+                && slot <= current_slot
+                && cache.slot.load(Ordering::Acquire) == slot
+            {
+                let is_rooted = cache.is_rooted();
+                if ancestors.contains_key(&slot) || is_rooted {
+                    if let Some(arc_acc) =
+                        cache.with_bag(account_index, |bag| std::sync::Arc::clone(&bag.account))
+                    {
+                        // Scanning backward from current_slot, the first match is the
+                        // highest valid ancestor slot.
+                        return Some((slot, arc_acc));
                     }
                 }
             }
@@ -5979,10 +5974,8 @@ impl AccountsDb {
         slot: Slot,
         cache: &solana_accounts_in_memory::slot_cache::SlotCache,
     ) {
-        let word = ((slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize;
-        let bit = 1u64 << ((slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
         cache.for_each_bag(|bag| {
-            bag.bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
+            bag.bitset.clear_bit(slot, Ordering::AcqRel);
         });
     }
 
@@ -6033,11 +6026,8 @@ impl AccountsDb {
                 break;
             }
             if  prev_state== SLOT_FROZEN ||prev_state ==SLOT_ACTIVE {
-                let word = ((prev_stored % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) / 64) as usize;
-                let bit = 1u64 << ((prev_stored % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) % 64);
                 prev_cache.for_each_bag(|bag| {
-                    bag.bitset.bits[word].fetch_and(!bit, Ordering::AcqRel);
-
+                    bag.bitset.clear_bit(prev_stored, Ordering::AcqRel);
                 });
                 prev_cache.clear_for_reuse(&self.locator);
                 prev_cache.state.store(SLOT_FREE, Ordering::Release);
