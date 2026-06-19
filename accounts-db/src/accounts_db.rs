@@ -1021,7 +1021,6 @@ impl solana_frozen_abi::abi_example::AbiExample for AccountsDb {
         accounts_db
     }
 }
-
 impl AccountsDb {
     // The default high and low watermark sizes for the accounts read cache.
     // If the cache size exceeds MAX_SIZE_HI, it'll evict entries until the size is <= MAX_SIZE_LO.
@@ -5420,14 +5419,12 @@ impl AccountsDb {
 
         // ── Acquire the ring-buffer slot (with deferred write-out if needed) ──
 
-        self.locator.highest_active_slot.fetch_max(target_slot, Ordering::Release);
-        
         let mut current_slot=cache.slot.load(Ordering::Acquire);
         while current_slot != target_slot {
 
             match cache.state.compare_exchange( SLOT_FREE, SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) =>{
-                    cache.slot.store(target_slot, Ordering::Relaxed);
+                    cache.slot.store(target_slot, Ordering::Release);
                     break;
                 }
                 Err(state)=>{
@@ -5465,6 +5462,8 @@ impl AccountsDb {
             std::hint::spin_loop();
             current_slot = cache.slot.load(Ordering::Acquire);
         }
+
+        self.locator.highest_active_slot.fetch_max(target_slot, Ordering::Release);
 
         // ── Store each account into the SlotCache ──
         let ebr = self.in_memory_db.ebr.enter();
@@ -6062,6 +6061,7 @@ impl AccountsDb {
                             if prev_bag.is_modified.load(Ordering::Acquire) {
                                 // Absorb predecessor's write obligation
                                 prev_bag.is_modified.store(false, Ordering::Release);
+                                // todo drop pre_bag  to release more memory
                                 if !bag.is_modified.load(Ordering::Acquire) {
                                     // Current slot didn't modify this account — inherit the obligation
                                     bag.is_modified.store(true, Ordering::Release);
