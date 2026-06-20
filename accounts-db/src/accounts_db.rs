@@ -6024,18 +6024,8 @@ impl AccountsDb {
             if prev_state>=SLOT_ROOTED{
                 break;
             }
-            if  prev_state== SLOT_FROZEN ||prev_state ==SLOT_ACTIVE {
-                prev_cache.for_each_bag(|bag| {
-                    bag.bitset.clear_bit(prev_stored, Ordering::AcqRel);
-                });
-                prev_cache.clear_for_reuse(&self.locator);
-                prev_cache.state.store(SLOT_FREE, Ordering::Release);
+            prev_cache.slot.store(0,Ordering::Release);
 
-
-
-            } else {
-                continue;
-            }
 
         }
     }
