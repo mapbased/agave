@@ -5907,7 +5907,7 @@ impl AccountsDb {
         debug!("slot rooted :{}",slot);
 
         // ═══ Phase 1: Forward scan — clean fork (non-rooted) slots ═══
-        self.cleanup_fork_slots(slot);
+      //  self.cleanup_fork_slots(slot);
 
         // ═══ Phase 2: Backward Coalescing — absorb predecessor write obligations ═══
         self.backward_coalesce(slot, cache);
