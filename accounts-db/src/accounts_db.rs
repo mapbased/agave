@@ -5906,10 +5906,7 @@ impl AccountsDb {
         cache.state.store(SLOT_ROOTED, Ordering::Release);
         debug!("slot rooted :{}",slot);
 
-        // ═══ Phase 1: Forward scan — clean fork (non-rooted) slots ═══
-      //  self.cleanup_fork_slots(slot);
-
-        // ═══ Phase 2: Backward Coalescing — absorb predecessor write obligations ═══
+        // Backward Coalescing — absorb predecessor write obligations.
         self.backward_coalesce(slot, cache);
 
         AccountsAddRootTiming {
@@ -6000,34 +5997,6 @@ impl AccountsDb {
         cache.clear_for_reuse(&self.locator);
         cache.state.store(SLOT_FREE, Ordering::Release);
         cache.slot.store(0, Ordering::Release);
-    }
-
-    /// add_root Phase 1: Forward-scan from `slot` to clean up fork (non-rooted) slots.
-    /// Stops when encountering a FREE slot or a ROOTED slot.
-    fn cleanup_fork_slots(&self, slot: Slot) {
-        use solana_accounts_in_memory::slot_cache::{SLOT_FREE, SLOT_ROOTED};
-
-
-        for offset in 1..(solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64) {
-            let prev_slot_candidate = slot.saturating_sub(offset);
-            // if prev_slot_candidate == 0 {  //never be 0 on mainnet snapshot
-            //     break;
-            // }
-            let prev_idx = (prev_slot_candidate % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-            let prev_cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[prev_idx];
-            let prev_stored = prev_cache.slot.load(Ordering::Acquire);
-
-            if prev_stored > prev_slot_candidate {
-                break;
-            } // Newer slot occupies this position, keep going!
-            let prev_state=prev_cache.state.load(Ordering::Acquire);
-            if prev_state>=SLOT_ROOTED{
-                break;
-            }
-            prev_cache.slot.store(0,Ordering::Release);
-
-
-        }
     }
 
     /// add_root Phase 2: Backward Coalescing.
