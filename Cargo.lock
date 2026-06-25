@@ -1019,6 +1019,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "art"
+version = "4.1.0-beta.3"
+dependencies = [
+ "libc 0.2.186",
+ "modular-bitfield",
+ "rand 0.9.4",
+ "windows-sys 0.45.0",
+]
+
+[[package]]
 name = "ascii"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6125,7 +6135,7 @@ dependencies = [
  "ahash 0.8.12",
  "anyhow",
  "arrayref",
- "art",
+ "art 0.1.0",
  "axum",
  "bincode",
  "blake3",
@@ -7171,7 +7181,6 @@ dependencies = [
 name = "solana-accounts-in-memory"
 version = "4.1.0-beta.3"
 dependencies = [
- "art",
  "blake3",
  "dashmap 5.5.3",
  "libc 0.2.186",
