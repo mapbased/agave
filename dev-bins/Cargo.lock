@@ -833,6 +833,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
+name = "art"
+version = "4.1.0-beta.3"
+dependencies = [
+ "libc",
+ "modular-bitfield",
+ "rand 0.9.4",
+ "windows-sys 0.45.0",
+]
+
+[[package]]
 name = "ascii"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6240,6 +6250,7 @@ dependencies = [
 name = "solana-accounts-in-memory"
 version = "4.1.0-beta.3"
 dependencies = [
+ "art",
  "blake3",
  "dashmap",
  "libc",
