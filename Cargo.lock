@@ -6159,6 +6159,7 @@ dependencies = [
  "lz4",
  "memmap2 0.9.10",
  "mev-api",
+ "mev-arb",
  "modular-bitfield",
  "parking_lot 0.12.3",
  "rand 0.9.4",
