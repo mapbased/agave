@@ -129,7 +129,9 @@ members = [
     "watchtower",
     "xdp",
     "xdp-ebpf",
-    "runner"
+    "runner",
+    "mev-api",
+    "mev-plugins/mev-arb",
 ]
 
 exclude = [

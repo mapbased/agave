@@ -4587,6 +4587,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-api"
+version = "0.1.0"
+dependencies = [
+ "solana-pubkey 4.2.0",
+]
+
+[[package]]
+name = "mev-arb"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "mev-api",
+ "solana-pubkey 4.2.0",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6137,10 +6153,12 @@ dependencies = [
  "im",
  "imbl",
  "libc",
+ "libloading",
  "log",
  "lru 0.18.0",
  "lz4",
  "memmap2 0.9.10",
+ "mev-api",
  "modular-bitfield",
  "parking_lot 0.12.3",
  "rand 0.9.4",

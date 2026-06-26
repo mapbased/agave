@@ -5469,19 +5469,33 @@ impl AccountsDb {
         let ebr = self.in_memory_db.ebr.enter();
         for i in 0..accounts.len() {
             accounts.account(i, |account| {
-                let account_index = self.in_memory_db.get_or_register_id(account.pubkey(), &ebr);
-                let bitset = self
-                    .locator
-                    .insert(account.pubkey(), target_slot, account_index);
-                if !cache.write(
+                // Capture pubkey and owner before take_account() moves the data out.
+                let pubkey = *account.pubkey();
+                let owner = *account.owner();
+                let account_index = self.in_memory_db.get_or_register_id(&pubkey, &ebr);
+                let bitset = self.locator.insert(&pubkey, target_slot, account_index);
+                let arc_account = std::sync::Arc::new(account.take_account());
+                let written = cache.write(
                     account_index,
                     AccountBag {
-                        account: std::sync::Arc::new(account.take_account()),
+                        account: std::sync::Arc::clone(&arc_account),
                         is_modified: AtomicBool::new(true),
                         bitset: std::sync::Arc::clone(&bitset),
                     },
                     target_slot,
-                ) {
+                );
+                if written {
+                    // MEV notification: pubkey and owner are already in scope, no extra lookup.
+                    if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get() {
+                        notifier.on_account_written(
+                            &pubkey,
+                            &owner,
+                            arc_account,
+                            target_slot,
+                            account_index as u64,
+                        );
+                    }
+                } else {
                     bitset.clear_bit(target_slot, Ordering::AcqRel);
                 }
             });
