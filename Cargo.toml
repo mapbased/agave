@@ -131,7 +131,7 @@ members = [
     "xdp-ebpf",
     "runner",
     "mev-api",
-    "mev-plugins/mev-arb",
+    "mev-plugins/mev-arb", "mev-plugins/mev-scan",
 ]
 
 exclude = [

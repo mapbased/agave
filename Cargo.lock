@@ -4603,6 +4603,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-scan"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "mev-api",
+ "solana-pubkey 4.2.0",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
