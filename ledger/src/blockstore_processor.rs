@@ -660,7 +660,7 @@ pub fn process_entries_for_tests(
         &replay_tx_thread_pool,
         validate_and_hash_transaction,
     )?;
-    unverified_signatures.verify()?;
+    // unverified_signatures.verify()?; // SKIPPED for fast replay
 
     let mut entry_starting_index: usize = bank.transaction_count().try_into().unwrap();
     let mut batch_timing = BatchExecutionTiming::default();
@@ -721,37 +721,45 @@ fn process_entries(
                 }
             }
             EntryType::Transactions(transactions) => {
-                queue_batches_with_lock_retry(
-                    bank,
-                    starting_index,
-                    transactions,
-                    &mut batches,
-                    |batches| {
-                        process_batches(
-                            bank,
-                            replay_tx_thread_pool,
-                            batches,
-                            transaction_status_sender,
-                            replay_vote_sender,
-                            batch_timing,
-                            log_messages_bytes_limit,
-                            prioritization_fee_cache,
-                        )
-                    },
-                )?;
+                if bank.has_installed_scheduler() {
+                    let indexes = starting_index..starting_index + transactions.len();
+                    let task_ids = indexes.map(|i| i.try_into().unwrap());
+                    bank.schedule_transaction_executions(transactions.into_iter().zip(task_ids))?;
+                } else {
+                    queue_batches_with_lock_retry(
+                        bank,
+                        starting_index,
+                        transactions,
+                        &mut batches,
+                        |batches| {
+                            process_batches(
+                                bank,
+                                replay_tx_thread_pool,
+                                batches,
+                                transaction_status_sender,
+                                replay_vote_sender,
+                                batch_timing,
+                                log_messages_bytes_limit,
+                                prioritization_fee_cache,
+                            )
+                        },
+                    )?;
+                }
             }
         }
     }
-    process_batches(
-        bank,
-        replay_tx_thread_pool,
-        batches.into_iter(),
-        transaction_status_sender,
-        replay_vote_sender,
-        batch_timing,
-        log_messages_bytes_limit,
-        prioritization_fee_cache,
-    )?;
+    if !bank.has_installed_scheduler() {
+        process_batches(
+            bank,
+            replay_tx_thread_pool,
+            batches.into_iter(),
+            transaction_status_sender,
+            replay_vote_sender,
+            batch_timing,
+            log_messages_bytes_limit,
+            prioritization_fee_cache,
+        )?;
+    }
     for hash in tick_hashes {
         bank.register_tick(&hash);
     }

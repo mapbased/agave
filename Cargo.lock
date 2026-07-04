@@ -8774,7 +8774,7 @@ dependencies = [
  "bs58",
  "bv",
  "bytes",
- "dashmap 5.5.3",
+ "dashmap 6.1.0",
  "im",
  "imbl",
  "log",
