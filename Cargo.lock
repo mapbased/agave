@@ -6358,6 +6358,7 @@ name = "runner"
 version = "0.1.0"
 dependencies = [
  "agave-feature-set",
+ "agave-fs",
  "agave-precompiles",
  "agave-reserved-account-keys",
  "agave-snapshots",
