@@ -634,7 +634,9 @@ pub fn process_entries_for_tests(
     transaction_status_sender: Option<&TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
 ) -> Result<()> {
-    let replay_tx_thread_pool = create_thread_pool(1);
+    static REPLAY_TX_THREAD_POOL: std::sync::OnceLock<ThreadPool> = std::sync::OnceLock::new();
+    let replay_tx_thread_pool = REPLAY_TX_THREAD_POOL.get_or_init(|| create_thread_pool(num_cpus::get()));
+
     let validate_and_hash_transaction = {
         let bank = bank.clone_with_scheduler();
         move |versioned_tx: VersionedTransaction,
@@ -4838,7 +4840,7 @@ pub mod tests {
             run_verification: true,
             ..ProcessOptions::default()
         };
-        let replay_tx_thread_pool = create_thread_pool(1);
+        let replay_tx_thread_pool = create_thread_pool(num_cpus::get());
         process_bank_0(
             &bank0,
             compute_shred_version(&genesis_config.hash(), None),
@@ -5452,7 +5454,7 @@ pub mod tests {
         slot_full: bool,
         prev_entry_hash: Hash,
     ) -> result::Result<(), BlockstoreProcessorError> {
-        let replay_tx_thread_pool = create_thread_pool(1);
+        let replay_tx_thread_pool = create_thread_pool(num_cpus::get());
         let mut progress = ConfirmationProgress::new(prev_entry_hash);
         confirm_slot_entries(
             &BankWithScheduler::new_without_scheduler(bank.clone()),
@@ -5513,7 +5515,7 @@ pub mod tests {
         let genesis_hash = genesis_config.hash();
         let (bank, _bank_forks) = Bank::new_with_bank_forks_for_tests(&genesis_config);
         let bank = BankWithScheduler::new_without_scheduler(bank);
-        let replay_tx_thread_pool = create_thread_pool(1);
+        let replay_tx_thread_pool = create_thread_pool(num_cpus::get());
         let mut timing = ConfirmationTiming::default();
         let mut progress = ConfirmationProgress::new(genesis_hash);
         let amount = genesis_config.rent.minimum_balance(0);
@@ -5752,7 +5754,7 @@ pub mod tests {
             starting_index: 0,
         };
 
-        let replay_tx_thread_pool = create_thread_pool(1);
+        let replay_tx_thread_pool = create_thread_pool(num_cpus::get());
         let mut batch_execution_timing = BatchExecutionTiming::default();
         let result = process_batches(
             &bank,
@@ -6124,7 +6126,7 @@ pub mod tests {
         all_shreds.extend(footer_shreds);
         blockstore.insert_shreds(all_shreds, None, true).unwrap();
 
-        let replay_tx_thread_pool = create_thread_pool(1);
+        let replay_tx_thread_pool = create_thread_pool(num_cpus::get());
 
         (
             blockstore,
