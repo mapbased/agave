@@ -97,6 +97,7 @@ use {
     },
     tempfile::TempDir,
 };
+use solana_accounts_in_memory::slot_cache::{SLOT_ACTIVE, SLOT_FREE};
 
 // when the accounts write cache exceeds this many bytes, we will flush it
 // this can be specified on the command line, too (--accounts-db-write-cache-limit)
@@ -986,6 +987,10 @@ pub struct AccountsDb {
 
     /// The largest slot that has been added as a root via `add_root`.
     max_root: AtomicU64,
+
+    // --- Added for InMemoryAccountsDb ---
+    pub in_memory_db: &'static solana_accounts_in_memory::in_memory::InMemoryAccountsDb,
+    pub locator: std::sync::Arc<solana_accounts_in_memory::locator::GlobalLocator>,
 }
 
 pub fn quarter_thread_count() -> usize {
@@ -1146,6 +1151,10 @@ impl AccountsDb {
             last_swept_full_snapshot_slot: AtomicU64::new(0),
             best_ancient_slots_to_shrink: RwLock::default(),
             max_root: AtomicU64::new(0),
+
+            in_memory_db: solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global(),
+            locator: solana_accounts_in_memory::locator::GlobalLocator::new(
+                solana_accounts_in_memory::in_memory::InMemoryAccountsDb::init_global())
         };
 
         {
@@ -1785,7 +1794,11 @@ impl AccountsDb {
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
     pub fn clean_accounts(&self, max_clean_root_inclusive: Option<Slot>, is_startup: bool) {
-        if self.exhaustively_verify_refcounts {
+        return;
+    }
+    fn clean_accounts_old(&self, max_clean_root_inclusive: Option<Slot>, is_startup: bool) {
+
+    if self.exhaustively_verify_refcounts {
             //at startup use all cores to verify refcounts
             if is_startup {
                 self.exhaustively_verify_refcounts(max_clean_root_inclusive);
@@ -3138,6 +3151,9 @@ impl AccountsDb {
     /// get a sorted list of slots older than an epoch
     /// squash those slots into ancient append vecs
     pub fn shrink_ancient_slots(&self, epoch_schedule: &EpochSchedule) {
+        return;
+    }
+    pub fn _shrink_ancient_slots(&self, epoch_schedule: &EpochSchedule) {
         if self.ancient_append_vec_offset.is_none() {
             return;
         }
@@ -3205,7 +3221,12 @@ impl AccountsDb {
         uncleaned_pubkeys.extend(pubkeys);
     }
 
+
     pub fn shrink_candidate_slots(&self, epoch_schedule: &EpochSchedule) -> usize {
+        return  0;
+    }
+
+    pub fn _shrink_candidate_slots(&self, epoch_schedule: &EpochSchedule) -> usize {
         let oldest_non_ancient_slot = self.get_oldest_non_ancient_slot(epoch_schedule);
 
         let shrink_candidates_slots =
@@ -3893,7 +3914,135 @@ impl AccountsDb {
         }
     }
 
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  Helper methods for the ring-buffer SlotCache / GlobalLocator system
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Scan the bitset for the best (highest) ancestor slot that holds this account.
+    /// Returns `(slot, Arc<AccountSharedData>)` if found.
+    ///
+    /// O(1) per set bit via [`iter_set_bits_backward`]: positions are visited in decreasing
+    /// slot order (current_slot first, then ancestors), so the first valid match is the
+    /// highest ancestor. Invalid candidates (wrong slot / not ancestor-or-rooted / bag
+    /// missing) are simply skipped.
+    fn find_in_caches(
+        &self,
+        bitset: &solana_accounts_in_memory::locator::AccountBitset,
+        account_index: u32,
+        ancestors: &Ancestors,
+        current_slot: Slot,
+    ) -> Option<(Slot, std::sync::Arc<AccountSharedData>)> {
+        for pos in solana_accounts_in_memory::locator::iter_set_bits_backward(
+            bitset.load_bits(Ordering::Acquire),
+            current_slot,
+        ) {
+            let cache = &self.locator.slot_caches[pos];
+            let slot = cache.slot.load(Ordering::Acquire);
+
+            // Only consider slots that are valid and <= current_slot
+            if slot != 0
+                && slot <= current_slot
+                && cache.slot.load(Ordering::Acquire) == slot
+            {
+                let is_rooted = cache.is_rooted();
+                if ancestors.contains_key(&slot) || is_rooted {
+                    if let Some(arc_acc) =
+                        cache.with_bag(account_index, |bag| std::sync::Arc::clone(&bag.account))
+                    {
+                        // Scanning backward from current_slot, the first match is the
+                        // highest valid ancestor slot.
+                        return Some((slot, arc_acc));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+
     fn do_load(
+        &self,
+        ancestors: &Ancestors,
+        pubkey: &Pubkey,
+        _load_hint: LoadHint,
+        populate_read_cache: PopulateReadCache,
+    ) -> Option<(AccountSharedData, Slot)> {
+        use solana_accounts_in_memory::slot_cache::AccountBag;
+
+        let current_slot = ancestors.max_slot();
+
+        // 1. Try Locator → SlotCache path
+        if let Some((arc_bitset, account_index)) = self.locator.get_with_index(pubkey) {
+            // find_in_caches: scan bitset for the best (highest) ancestor slot that has this account
+            if let Some((found_slot, arc_account)) =
+                self.find_in_caches(&arc_bitset, account_index, ancestors, current_slot)
+            {
+                if populate_read_cache == PopulateReadCache::True {
+                    // ★ Read-cache penetration: cache into current slot (Arc::clone, zero-copy)
+                    let cache_index = (current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+                    let cache = &self.locator.slot_caches[cache_index];
+                    if cache.slot.load(Ordering::Acquire) == current_slot {
+                        if cache.try_cache(
+                            account_index,
+                            AccountBag {
+                                account: std::sync::Arc::clone(&arc_account),
+                                is_modified: AtomicBool::new(false),
+                                bitset: std::sync::Arc::clone(&arc_bitset),
+                            },
+                            current_slot,
+                        ) {
+                            // Set locator bit for current slot (may already be set if written)
+                            arc_bitset.set_bit(current_slot, Ordering::AcqRel);
+
+                        }
+                    }
+                }
+
+                self.load_account_stats
+                    .num_loaded_from_write_cache
+                    .fetch_add(1, Ordering::Relaxed);
+                if arc_account.is_zero_lamport() {
+                    return None;
+                }
+                return Some(((*arc_account).clone(), found_slot));
+            }
+        }
+
+        // 2. Fallback to ART-tree
+        let account = self.in_memory_db.load_pubkey(pubkey)?;
+        if account.lamports == 0 {
+            return None;
+        }
+        let account_shared_data = solana_account::AccountSharedData::from(account);
+
+        if populate_read_cache == PopulateReadCache::True {
+            // Cache ART-tree result into current slot if the slot cache is active
+            let cache_index = (current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+            let cache = &self.locator.slot_caches[cache_index];
+            if cache.slot.load(Ordering::Acquire) == current_slot {
+                let ebr = self.in_memory_db.ebr.enter();
+                let account_index = self.in_memory_db.get_or_register_id(pubkey, &ebr);
+                let arc_bitset = self.locator.insert(pubkey, current_slot, account_index);
+                let arc_account = std::sync::Arc::new(account_shared_data.clone());
+                if !cache.try_cache(
+                    account_index,
+                    AccountBag {
+                        account: arc_account,
+                        is_modified: AtomicBool::new(false),
+                        bitset: std::sync::Arc::clone(&arc_bitset),
+                    },
+                    current_slot,
+                ) {
+                    // If it was purged, clear the locator bit
+                    arc_bitset.clear_bit(current_slot, Ordering::AcqRel);
+                }
+            }
+        }
+
+        Some((account_shared_data, 0))
+    }
+    fn _do_load(
         &self,
         ancestors: &Ancestors,
         pubkey: &Pubkey,
@@ -4059,7 +4208,15 @@ impl AccountsDb {
     /// cannot delete a flushed (rooted) slot's data. Returns whether any slot was actually
     /// removed from the cache. This allows the snapshot minimizer to determine whether
     /// it should purge the storage as well
+
     fn purge_slots_from_cache<'a>(
+        &self,
+        removed_slots: impl Iterator<Item = &'a Slot>,
+        purge_stats: &PurgeStats,
+    ) -> bool {
+        return true
+    }
+    fn _purge_slots_from_cache<'a>(
         &self,
         removed_slots: impl Iterator<Item = &'a Slot>,
         purge_stats: &PurgeStats,
@@ -4335,7 +4492,7 @@ impl AccountsDb {
     }
 
     /// Hashes `account` and returns the underlying Hasher
-    fn hash_account_helper(account: &impl ReadableAccount, pubkey: &Pubkey) -> blake3::Hasher {
+    pub fn hash_account_helper(account: &impl ReadableAccount, pubkey: &Pubkey) -> blake3::Hasher {
         let mut hasher = blake3::Hasher::new();
 
         // allocate a buffer on the stack that's big enough
@@ -4376,6 +4533,11 @@ impl AccountsDb {
             slot_cache.report_slot_store_metrics();
         }
         self.accounts_cache.report_size();
+
+        let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
+        if cache.slot.load(Ordering::Acquire) == slot {
+            cache.mark_frozen();
+        }
     }
 
     /// true if write cache is too big and there are unflushed roots available to flush.
@@ -4391,6 +4553,9 @@ impl AccountsDb {
     // `force_flush` flushes all the cached roots `<= requested_flush_root`. It also then
     // flushes excess remaining rooted slots while 'should_aggressively_flush_cache' is true
     pub fn flush_accounts_cache(&self, force_flush: bool, requested_flush_root: Option<Slot>) {
+
+    }
+    pub fn _flush_accounts_cache(&self, force_flush: bool, requested_flush_root: Option<Slot>) {
         #[cfg(not(test))]
         assert!(requested_flush_root.is_some());
 
@@ -4951,6 +5116,31 @@ impl AccountsDb {
 
     /// Return all of the accounts for a given slot
     pub fn get_pubkey_account_for_slot(&self, slot: Slot) -> Vec<(Pubkey, AccountSharedData)> {
+        let cache_index = (slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+        let cache = &self.locator.slot_caches[cache_index];
+
+        if cache.slot.load(Ordering::Acquire) == slot {
+            let mut result = Vec::new();
+            cache.for_each_bag(|bag| {
+                // Only return accounts that were actually written in this slot.
+                // Read-cached accounts (is_modified == false, inserted by do_load's
+                // cache penetration) must be excluded — otherwise
+                // calculate_delta_lt_hash treats them as modifications and
+                // produces an incorrect bank hash.
+                if !bag.is_modified.load(Ordering::Acquire) {
+                    return;
+                }
+                let account_index = bag.bitset.account_index;
+                if let Some(pubkey) = self.in_memory_db.pubkey_registry.get_pubkey(account_index) {
+                    result.push((pubkey, (*bag.account).clone()));
+                }
+            });
+            result
+        } else {
+            vec![]
+        }
+    }
+    pub fn _get_pubkey_account_for_slot(&self, slot: Slot) -> Vec<(Pubkey, AccountSharedData)> {
         let scan_result = self.scan_account_storage(
             slot,
             |loaded_account| {
@@ -5475,7 +5665,108 @@ impl AccountsDb {
 
     /// Stores accounts in the write cache and updates the index.
     /// This should only be used for accounts that are unrooted (unfrozen)
+
     pub(crate) fn store_accounts_unfrozen<'a>(
+        &self,
+        accounts: impl StorableAccounts<'a>,
+        _update_index_thread_selection: UpdateIndexThreadSelection,
+        _ancestors: &Ancestors,
+    ) {
+        use solana_accounts_in_memory::slot_cache::AccountBag;
+
+        if accounts.is_empty() {
+            return;
+        }
+
+        let target_slot = accounts.target_slot();
+        let cache_index = (target_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+        let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[cache_index];
+
+        // ── Acquire the ring-buffer slot (with deferred write-out if needed) ──
+
+        let mut current_slot=cache.slot.load(Ordering::Acquire);
+        while current_slot != target_slot {
+
+            match cache.state.compare_exchange( SLOT_FREE, SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) =>{
+                    cache.slot.store(target_slot, Ordering::Release);
+                    break;
+                }
+                Err(state)=>{
+                    if state == solana_accounts_in_memory::slot_cache::SLOT_ROOTED {
+                        // Background thread is supposed to flush this, but we hit the watermark wall!
+                        // Back-pressure: we claim it and flush it ourselves.
+                        if cache.state.compare_exchange(
+                            solana_accounts_in_memory::slot_cache::SLOT_ROOTED,
+                            solana_accounts_in_memory::slot_cache::SLOT_CLAIMING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire
+                        ).is_ok() {
+                            self.locator.flush_slot(current_slot, cache);
+                            cache.clear_for_reuse(&self.locator);
+                            cache.slot.store(target_slot, Ordering::Release);
+                            cache.state.store( SLOT_ACTIVE, Ordering::Release);
+
+                            break;
+                        }
+                    } else if state == solana_accounts_in_memory::slot_cache::SLOT_CLAIMING {
+                        // Background thread is currently flushing this slot.
+                        // Spin and wait until it becomes FREE.
+                        std::hint::spin_loop();
+                    } else if state ==  SLOT_ACTIVE || state == solana_accounts_in_memory::slot_cache::SLOT_FROZEN {
+                        // We caught up to a slot that is currently active or frozen (being used by foreground).
+                        // This means the entire ring buffer is full of active transactions!
+                        std::hint::spin_loop();
+                    } else {
+                        panic!("unexpected slot state: {}", state);
+                    }
+                }
+            }
+
+            // Spin wait until slot matches or becomes available
+            std::hint::spin_loop();
+            current_slot = cache.slot.load(Ordering::Acquire);
+        }
+
+        self.locator.highest_active_slot.fetch_max(target_slot, Ordering::Release);
+
+        // ── Store each account into the SlotCache ──
+        let ebr = self.in_memory_db.ebr.enter();
+        for i in 0..accounts.len() {
+            accounts.account(i, |account| {
+                // Capture pubkey and owner before take_account() moves the data out.
+                let pubkey = *account.pubkey();
+                let owner = *account.owner();
+                let account_index = self.in_memory_db.get_or_register_id(&pubkey, &ebr);
+                let bitset = self.locator.insert(&pubkey, target_slot, account_index);
+                let arc_account = std::sync::Arc::new(account.take_account());
+                let written = cache.write(
+                    account_index,
+                    AccountBag {
+                        account: std::sync::Arc::clone(&arc_account),
+                        is_modified: AtomicBool::new(true),
+                        bitset: std::sync::Arc::clone(&bitset),
+                    },
+                    target_slot,
+                );
+                if written {
+                    // MEV notification: pubkey and owner are already in scope, no extra lookup.
+                    if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get() {
+                        notifier.on_account_written(
+                            &pubkey,
+                            &owner,
+                            arc_account,
+                            target_slot,
+                            account_index as u64,
+                        );
+                    }
+                } else {
+                    bitset.clear_bit(target_slot, Ordering::AcqRel);
+                }
+            });
+        }
+    }
+    pub(crate) fn _store_accounts_unfrozen<'a>(
         &self,
         accounts: impl StorableAccounts<'a>,
         update_index_thread_selection: UpdateIndexThreadSelection,
@@ -5966,6 +6257,99 @@ impl AccountsDb {
     }
 
     pub fn add_root(&self, slot: Slot) -> AccountsAddRootTiming {
+        use solana_accounts_in_memory::slot_cache::SLOT_ROOTED;
+
+        let cache = &self.locator.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
+        let cur_slot=cache.slot.load(Ordering::Acquire) ;
+        if cur_slot!= slot  &&cur_slot!=0{
+            panic!("slot to root not found in ring cache expect {} found {}",slot ,cur_slot);
+        }
+        cache.state.store(SLOT_ROOTED, Ordering::Release);
+        debug!("slot rooted :{}",slot);
+
+        // Backward Coalescing — absorb predecessor write obligations.
+        self.backward_coalesce(slot, cache);
+
+        AccountsAddRootTiming {
+            index_us: 0,
+            cache_us: 0,
+        }
+    }
+
+
+    /// Write out all `is_modified == true` accounts from a SlotCache to the ART-tree,
+    /// then clear the locator bits for that slot.
+    /// Called during ring-buffer slot reuse (store_accounts_unfrozen) for ROOTED slots.
+    /// Clear locator bits for all accounts in a slot's cache (without writing to ART-tree).
+    /// Used for non-rooted slots (fork data or implicit purge).
+    fn clear_locator_bits(
+        &self,
+        slot: Slot,
+        cache: &solana_accounts_in_memory::slot_cache::SlotCache,
+    ) {
+        cache.for_each_bag(|bag| {
+            bag.bitset.clear_bit(slot, Ordering::AcqRel);
+        });
+    }
+
+    /// Purge a single slot from the ring-buffer cache.
+    /// Uses CAS to claim exclusive cleanup rights. Safe to call concurrently.
+    fn purge_slot_from_cache(&self, slot: Slot) {
+        use solana_accounts_in_memory::slot_cache::SLOT_FREE;
+
+        let idx = (slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+        let cache = &self.locator.slot_caches[idx];
+
+        // CAS: slot → u64::MAX to claim exclusive cleanup
+        if cache
+            .slot
+            .compare_exchange(slot, u64::MAX, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return; // Another thread already cleaned, or slot was overwritten
+        }
+
+        // Clear locator bits (don't write to ART-tree — fork data is discarded)
+        self.clear_locator_bits(slot, cache);
+        cache.clear_for_reuse(&self.locator);
+        cache.state.store(SLOT_FREE, Ordering::Release);
+        cache.slot.store(0, Ordering::Release);
+    }
+
+    /// add_root Phase 2: Backward Coalescing.
+    /// For each account in the current slot, find its nearest predecessor via
+    /// `scan_bitset_backward`. If the predecessor has `is_modified == true`,
+    /// absorb its write obligation (set predecessor to false, inherit if needed).
+    fn backward_coalesce(
+        &self,
+        slot: Slot,
+        cache: &solana_accounts_in_memory::slot_cache::SlotCache,
+    ) {
+        cache.for_each_bag(|bag| {
+            let account_index = bag.bitset.account_index;
+            if let Some(prev_slot) = self.locator.scan_bitset_backward(&bag.bitset, slot) {
+                let prev_cache = &self.locator.slot_caches[(prev_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
+                if prev_cache.slot.load(Ordering::Acquire) == prev_slot {
+                    if prev_cache.state.load(Ordering::Acquire)
+                        == solana_accounts_in_memory::slot_cache::SLOT_ROOTED
+                    {
+                        prev_cache.with_bag(account_index, |prev_bag| {
+                            if prev_bag.is_modified.load(Ordering::Acquire) {
+                                // Absorb predecessor's write obligation
+                                prev_bag.is_modified.store(false, Ordering::Release);
+                                // todo drop pre_bag  to release more memory
+                                if !bag.is_modified.load(Ordering::Acquire) {
+                                    // Current slot didn't modify this account — inherit the obligation
+                                    bag.is_modified.store(true, Ordering::Release);
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
+    pub fn _add_root(&self, slot: Slot) -> AccountsAddRootTiming {
         let mut index_time = Measure::start("index_add_root");
         self.accounts_index.add_root(slot);
         index_time.stop();
@@ -6999,8 +7383,7 @@ impl AccountsDb {
     /// useful to adapt tests written prior to introduction of the write cache
     /// to use the write cache
     pub fn flush_root_write_cache(&self, root: Slot) {
-        assert!(self.accounts_cache.contains_unflushed_root(root));
-        self.flush_accounts_cache(true, Some(root));
+        return;
     }
 
     pub fn all_account_count_in_accounts_file(&self, slot: Slot) -> usize {

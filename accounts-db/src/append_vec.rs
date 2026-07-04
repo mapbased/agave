@@ -161,7 +161,7 @@ pub struct AppendVec {
     file_size: u64,
 
     /// if true, remove file when dropped
-    remove_file_on_drop: AtomicBool,
+    pub remove_file_on_drop: AtomicBool,
 
     /// Flags if the append vec is dirty or not.
     /// Since fastboot requires that all storages are flushed to disk, be smart about it.
@@ -522,7 +522,7 @@ impl AppendVec {
     ///
     /// Prefer get_stored_account_callback() when possible, as it does not contain file format
     /// implementation details, and thus potentially can read less and be faster.
-    fn get_stored_account_meta_callback<Ret>(
+    pub fn get_stored_account_meta_callback<Ret>(
         &self,
         offset: usize,
         mut callback: impl for<'local> FnMut(StoredAccountMeta<'local>) -> Ret,

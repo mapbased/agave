@@ -4,6 +4,8 @@ members = [
     "account-decoder-client-types",
     "accounts-cluster-bench",
     "accounts-db",
+    "accounts-in-memory",
+    "art",
     "accounts-db/store-histogram",
     "banking-stage-ingress-types",
     "banks-client",
@@ -126,6 +128,9 @@ members = [
     "watchtower",
     "xdp",
     "xdp-ebpf",
+    "runner",
+    "mev-api",
+    "mev-plugins/mev-arb", "mev-plugins/mev-scan",
 ]
 
 exclude = [
@@ -575,6 +580,7 @@ winreg = "0.55"
 x509-parser = "0.18.1"
 xxhash-rust = "0.8.5"
 zstd = "0.13.3"
+art = { path = "art" }
 
 [profile.dev]
 debug = "line-tables-only"

@@ -822,6 +822,20 @@ pub(crate) fn make_merkle_shreds_for_tests<R: Rng>(
     )
 }
 
+/// Recover shreds from an erasure batch using Reed-Solomon coding.
+/// Exposes `merkle::recover` for external crates.
+pub fn recover(
+    shreds: Vec<Shred>,
+    reed_solomon_cache: &ReedSolomonCache,
+) -> Result<Box<dyn Iterator<Item = Result<Shred, Error>>>, Error> {
+    let merkle_shreds = shreds
+        .into_iter()
+        .map(merkle::Shred::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let recovered = merkle::recover(merkle_shreds, reed_solomon_cache)?;
+    Ok(Box::new(recovered.map(|r| r.map(Shred::from))))
+}
+
 #[cfg(test)]
 mod tests {
     use {

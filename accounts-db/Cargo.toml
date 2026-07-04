@@ -39,6 +39,7 @@ frozen-abi = [
 ]
 
 [dependencies]
+solana-accounts-in-memory = { path = "../accounts-in-memory" }
 agave-fs = { workspace = true }
 ahash = { workspace = true }
 blake3 = { workspace = true }
