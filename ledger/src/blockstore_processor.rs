@@ -634,8 +634,7 @@ pub fn process_entries_for_tests(
     transaction_status_sender: Option<&TransactionStatusSender>,
     replay_vote_sender: Option<&ReplayVoteSender>,
 ) -> Result<()> {
-    static REPLAY_TX_THREAD_POOL: std::sync::OnceLock<ThreadPool> = std::sync::OnceLock::new();
-    let replay_tx_thread_pool = REPLAY_TX_THREAD_POOL.get_or_init(|| create_thread_pool(num_cpus::get()));
+    let replay_tx_thread_pool =transaction_hash_verify_thread_pool();
 
     let validate_and_hash_transaction = {
         let bank = bank.clone_with_scheduler();
