@@ -97,7 +97,7 @@ use {
     },
     tempfile::TempDir,
 };
-use solana_accounts_in_memory::slot_cache::{SLOT_ACTIVE, SLOT_FREE};
+use solana_accounts_in_memory::slot_cache::{AccountBag, SLOT_ACTIVE, SLOT_FREE};
 
 // when the accounts write cache exceeds this many bytes, we will flush it
 // this can be specified on the command line, too (--accounts-db-write-cache-limit)
@@ -3960,6 +3960,48 @@ impl AccountsDb {
         None
     }
 
+    pub fn prefetch(&self, pubkey: &Pubkey,slot:Slot){
+       
+        self.load_fromdb(pubkey,slot,PopulateReadCache::True);
+         // 从
+    }
+    
+    fn load_fromdb(&self, pubkey: &Pubkey,     current_slot:Slot, populate_read_cache: PopulateReadCache,)->Option<(AccountSharedData, Slot)>{
+        let account = self.in_memory_db.load_pubkey(pubkey)?;
+        
+        let account_shared_data = solana_account::AccountSharedData::from(account);
+
+        if populate_read_cache == PopulateReadCache::True {
+            // Cache ART-tree result into current slot if the slot cache is active
+            let cache_index = (current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+            let cache = &self.locator.slot_caches[cache_index];
+            if cache.slot.load(Ordering::Acquire) == current_slot {
+                let ebr = self.in_memory_db.ebr.enter();
+                let account_index = self.in_memory_db.get_or_register_id(pubkey, &ebr);
+                let arc_bitset = self.locator.insert(pubkey, current_slot, account_index);
+                let arc_account = std::sync::Arc::new(account_shared_data.clone());
+                if !cache.try_cache(
+                    account_index,
+                    AccountBag {
+                        account: arc_account,
+                        is_modified: AtomicBool::new(false),
+                        bitset: std::sync::Arc::clone(&arc_bitset),
+                    },
+                    current_slot,
+                ) {
+                    // Only clear the locator bit if the slot was actually purged/recycled.
+                    // Don't clear if try_cache failed because a concurrent write() already
+                    // inserted the account — the bit must remain set for find_in_caches.
+                    if cache.slot.load(Ordering::Acquire) != current_slot {
+                        arc_bitset.clear_bit(current_slot, Ordering::AcqRel);
+                    }
+                }
+            }
+        }
+
+        Some((account_shared_data, 0))
+
+    }
 
     fn do_load(
         &self,
@@ -4009,38 +4051,8 @@ impl AccountsDb {
             }
         }
 
-        // 2. Fallback to ART-tree
-        let account = self.in_memory_db.load_pubkey(pubkey)?;
-        if account.lamports == 0 {
-            return None;
-        }
-        let account_shared_data = solana_account::AccountSharedData::from(account);
-
-        if populate_read_cache == PopulateReadCache::True {
-            // Cache ART-tree result into current slot if the slot cache is active
-            let cache_index = (current_slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-            let cache = &self.locator.slot_caches[cache_index];
-            if cache.slot.load(Ordering::Acquire) == current_slot {
-                let ebr = self.in_memory_db.ebr.enter();
-                let account_index = self.in_memory_db.get_or_register_id(pubkey, &ebr);
-                let arc_bitset = self.locator.insert(pubkey, current_slot, account_index);
-                let arc_account = std::sync::Arc::new(account_shared_data.clone());
-                if !cache.try_cache(
-                    account_index,
-                    AccountBag {
-                        account: arc_account,
-                        is_modified: AtomicBool::new(false),
-                        bitset: std::sync::Arc::clone(&arc_bitset),
-                    },
-                    current_slot,
-                ) {
-                    // If it was purged, clear the locator bit
-                    arc_bitset.clear_bit(current_slot, Ordering::AcqRel);
-                }
-            }
-        }
-
-        Some((account_shared_data, 0))
+        // 2. Fallback to ART-tree 
+        self.load_fromdb(pubkey, current_slot, populate_read_cache)
     }
     fn _do_load(
         &self,
