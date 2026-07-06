@@ -7402,6 +7402,7 @@ dependencies = [
  "rayon",
  "smallvec",
  "solana-account 4.3.1",
+ "solana-address-lookup-table-interface",
  "solana-clock",
  "solana-epoch-schedule",
  "solana-lattice-hash",
