@@ -99,6 +99,15 @@ use {
 };
 use solana_accounts_in_memory::slot_cache::{AccountBag, SLOT_ACTIVE, SLOT_FREE};
 
+/// Reusable per-thread batch buffer for MEV notifications. Taken out
+/// (retaining capacity), filled, and put back each `store_accounts_unfrozen`
+/// call -> no heap alloc per call.
+thread_local! {
+    static MEV_BATCH_BUF: std::cell::RefCell<
+        Vec<(Pubkey, Pubkey, Arc<AccountSharedData>, u64)>,
+    > = std::cell::RefCell::new(Vec::new());
+}
+
 // when the accounts write cache exceeds this many bytes, we will flush it
 // this can be specified on the command line, too (--accounts-db-write-cache-limit)
 const WRITE_CACHE_LIMIT_BYTES_DEFAULT: u64 = 15_000_000_000;
@@ -5744,6 +5753,13 @@ impl AccountsDb {
 
         // ── Store each account into the SlotCache ──
         let ebr = self.in_memory_db.ebr.enter();
+        // Reusable batch buffer (thread_local pool) - avoids a heap alloc per
+        // store call. Taken out (retains capacity from the previous call),
+        // filled, then put back. Each tuple holds an `Arc<AccountSharedData>`
+        // moved in (the SlotCache already holds its own clone) -> zero extra
+        // clones / data copies.
+        let mut mev_batch: Vec<(Pubkey, Pubkey, Arc<AccountSharedData>, u64)> =
+            MEV_BATCH_BUF.with(|cell| mem::take(&mut *cell.borrow_mut()));
         for i in 0..accounts.len() {
             accounts.account(i, |account| {
                 // Capture pubkey and owner before take_account() moves the data out.
@@ -5762,21 +5778,24 @@ impl AccountsDb {
                     target_slot,
                 );
                 if written {
-                    // MEV notification: pubkey and owner are already in scope, no extra lookup.
-                    if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get() {
-                        notifier.on_account_written(
-                            &pubkey,
-                            &owner,
-                            arc_account,
-                            target_slot,
-                            account_index as u64,
-                        );
-                    }
+                    // Defer the MEV notification to the single batched call below.
+                    mev_batch.push((pubkey, owner, arc_account, account_index as u64));
                 } else {
                     bitset.clear_bit(target_slot, Ordering::AcqRel);
                 }
             });
         }
+
+        // Single batched MEV notification (only if a notifier is installed).
+        if !mev_batch.is_empty() {
+            if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get() {
+                notifier.on_accounts_written(target_slot, &mev_batch);
+            }
+        }
+
+        // Return the buffer to the pool (drops the Arcs, keeps capacity).
+        mev_batch.clear();
+        MEV_BATCH_BUF.with(|cell| *cell.borrow_mut() = mev_batch);
     }
     pub(crate) fn _store_accounts_unfrozen<'a>(
         &self,
