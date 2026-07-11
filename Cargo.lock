@@ -4917,11 +4917,13 @@ dependencies = [
 name = "mev-arb"
 version = "0.2.0"
 dependencies = [
+ "arc-swap",
  "crossbeam-channel",
  "log",
  "mev-api",
  "parking_lot 0.12.3",
  "ruint",
+ "solana-program",
  "solana-pubkey 4.2.0",
  "solana-sdk-ids",
 ]
