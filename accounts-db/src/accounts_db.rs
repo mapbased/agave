@@ -6287,6 +6287,42 @@ impl AccountsDb {
         }
     }
 
+    /// add_root Phase 1: Forward-scan from `slot` to clean up fork (non-rooted) slots.
+    /// Stops when encountering a FREE slot or a ROOTED slot.
+    fn cleanup_fork_slots(&self, slot: Slot) {
+        use solana_accounts_in_memory::slot_cache::{SLOT_FREE, SLOT_ROOTED};
+
+
+        for offset in 1..(solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64) {
+            let prev_slot_candidate = slot.saturating_sub(offset);
+
+            let prev_idx = (prev_slot_candidate % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+            let prev_cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[prev_idx];
+            let prev_stored = prev_cache.slot.load(Ordering::Acquire);
+
+            if prev_stored > prev_slot_candidate {
+                break;
+            } // Newer slot occupies this position, keep going!
+            let prev_state=prev_cache.state.load(Ordering::Acquire);
+            if prev_state>=SLOT_ROOTED{
+                break;
+            }
+            // Collect all modified accounts in this dead fork
+            let mut discarded_accounts = Vec::new();
+            prev_cache.for_each_bag(|bag| {
+                if bag.is_modified.load(Ordering::Acquire) {
+                    discarded_accounts.push(bag.bitset.account_index);
+
+                }
+                bag.bitset.clear_bit(prev_slot_candidate, Ordering::AcqRel);
+            });
+
+            // Notify plugins instantly
+            if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get()  &&! discarded_accounts.is_empty(){
+                notifier.on_slot_discarded(prev_slot_candidate, &discarded_accounts);
+            }
+        }
+    }
     pub fn add_root(&self, slot: Slot) -> AccountsAddRootTiming {
         use solana_accounts_in_memory::slot_cache::SLOT_ROOTED;
 
@@ -6298,6 +6334,7 @@ impl AccountsDb {
         cache.state.store(SLOT_ROOTED, Ordering::Release);
         debug!("slot rooted :{}",slot);
 
+        self.cleanup_fork_slots(slot);
         // Backward Coalescing — absorb predecessor write obligations.
         self.backward_coalesce(slot, cache);
 
@@ -6356,6 +6393,8 @@ impl AccountsDb {
         slot: Slot,
         cache: &solana_accounts_in_memory::slot_cache::SlotCache,
     ) {
+
+        // 2. Absorb write obligations from the nearest ROOTED predecessor
         cache.for_each_bag(|bag| {
             let account_index = bag.bitset.account_index;
             if let Some(prev_slot) = self.locator.scan_bitset_backward(&bag.bitset, slot) {
