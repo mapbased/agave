@@ -4919,6 +4919,7 @@ version = "0.2.0"
 dependencies = [
  "arc-swap",
  "crossbeam-channel",
+ "env_logger",
  "log",
  "mev-api",
  "parking_lot 0.12.3",
