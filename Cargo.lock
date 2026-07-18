@@ -4918,15 +4918,21 @@ name = "mev-arb"
 version = "0.2.0"
 dependencies = [
  "arc-swap",
+ "bincode",
+ "bs58",
  "crossbeam-channel",
  "env_logger",
  "log",
  "mev-api",
  "parking_lot 0.12.3",
  "ruint",
+ "serde",
+ "serde_json",
  "solana-program",
  "solana-pubkey 4.2.0",
+ "solana-sdk",
  "solana-sdk-ids",
+ "ureq",
 ]
 
 [[package]]
@@ -10196,6 +10202,7 @@ dependencies = [
  "solana-account-info",
  "solana-big-mod-exp",
  "solana-blake3-hasher",
+ "solana-borsh",
  "solana-clock",
  "solana-cpi",
  "solana-define-syscall 5.1.0",
@@ -11016,6 +11023,44 @@ dependencies = [
  "shuttle",
  "thiserror 2.0.18",
  "winapi",
+]
+
+[[package]]
+name = "solana-sdk"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "657e20ea41ba32cad0c493bec60b6d55cc6c30d2c1073b94cfee96dda0d764dd"
+dependencies = [
+ "bincode",
+ "bs58",
+ "serde",
+ "solana-account 4.3.1",
+ "solana-epoch-info",
+ "solana-epoch-rewards-hasher",
+ "solana-fee-structure",
+ "solana-inflation",
+ "solana-keypair",
+ "solana-message",
+ "solana-offchain-message",
+ "solana-presigner",
+ "solana-program",
+ "solana-program-memory",
+ "solana-pubkey 4.2.0",
+ "solana-sanitize",
+ "solana-sdk-ids",
+ "solana-sdk-macro",
+ "solana-seed-derivable",
+ "solana-seed-phrase",
+ "solana-serde",
+ "solana-serde-varint",
+ "solana-short-vec",
+ "solana-shred-version",
+ "solana-signature",
+ "solana-signer",
+ "solana-time-utils",
+ "solana-transaction",
+ "solana-transaction-error",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13657,6 +13702,8 @@ dependencies = [
  "once_cell",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "url 2.5.8",
  "webpki-roots 0.26.8",
 ]
