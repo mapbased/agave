@@ -1277,6 +1277,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfdc70193dadb9d7287fa4b633f15f90c876915b31f6af17da307fc59c9859a8"
 
 [[package]]
+name = "async-channel"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89b47800b0be77592da0afd425cc03468052844aff33b84e33cc696f64e77b6a"
+dependencies = [
+ "concurrent-queue",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-compression"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4919,7 +4931,6 @@ version = "0.2.0"
 dependencies = [
  "arc-swap",
  "bincode",
- "bs58",
  "crossbeam-channel",
  "env_logger",
  "log",
@@ -4932,7 +4943,6 @@ dependencies = [
  "solana-pubkey 4.2.0",
  "solana-sdk",
  "solana-sdk-ids",
- "ureq",
 ]
 
 [[package]]
@@ -6703,6 +6713,7 @@ dependencies = [
  "anyhow",
  "arrayref",
  "art",
+ "async-channel",
  "axum",
  "bincode",
  "blake3",
@@ -6750,6 +6761,7 @@ dependencies = [
  "solana-compute-budget",
  "solana-compute-budget-instruction",
  "solana-compute-budget-interface",
+ "solana-connection-cache",
  "solana-core",
  "solana-download-utils",
  "solana-entry",
@@ -6778,6 +6790,7 @@ dependencies = [
  "solana-program-pack",
  "solana-program-runtime",
  "solana-pubkey 4.2.0",
+ "solana-quic-client",
  "solana-rent",
  "solana-reward-info",
  "solana-rpc-client",
@@ -6798,6 +6811,7 @@ dependencies = [
  "solana-system-transaction",
  "solana-sysvar",
  "solana-time-utils",
+ "solana-tls-utils",
  "solana-transaction",
  "solana-transaction-error",
  "solana-transaction-status",
