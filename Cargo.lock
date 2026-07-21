@@ -4939,6 +4939,7 @@ dependencies = [
  "ruint",
  "serde",
  "serde_json",
+ "smallvec",
  "solana-program",
  "solana-pubkey 4.2.0",
  "solana-sdk",
