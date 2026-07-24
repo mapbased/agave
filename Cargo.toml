@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "account-decoder",
+    "mev-plugins/jito_protos",
+    "mev-plugins/jito_searcher_client",
     "account-decoder-client-types",
     "accounts-cluster-bench",
     "accounts-db",
