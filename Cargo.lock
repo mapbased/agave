@@ -7620,6 +7620,7 @@ version = "0.1.0"
 dependencies = [
  "agave-feature-set 4.2.0-alpha.0",
  "agave-fs",
+ "agave-logger",
  "agave-precompiles",
  "agave-reserved-account-keys 4.2.0-alpha.0",
  "agave-snapshots",
