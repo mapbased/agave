@@ -8098,6 +8098,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "scratch"
+version = "4.2.0-alpha.0"
+dependencies = [
+ "base64 0.22.1",
+ "bs58",
+ "reqwest 0.12.28",
+ "serde_json",
+ "solana-sdk 4.0.1",
+ "tokio",
+]
+
+[[package]]
 name = "sct"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
