@@ -4604,7 +4604,7 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "rustls 0.23.41",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.1",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.2",
@@ -7464,7 +7464,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls 0.23.41",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.1",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -7932,6 +7932,18 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9aace74cb666635c918e9c12bc0d348266037aa8eb599b5cba565709a8dff00"
+dependencies = [
+ "openssl-probe",
+ "rustls-pemfile",
+ "schannel",
+ "security-framework 2.11.1",
+]
+
+[[package]]
+name = "rustls-native-certs"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcff2dd52b58a8d98a70243663a0d234c4e2b79235637849d15913394a247d3"
@@ -7973,7 +7985,7 @@ dependencies = [
  "log",
  "once_cell",
  "rustls 0.23.41",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.1",
  "rustls-platform-verifier-android",
  "rustls-webpki 0.103.13",
  "security-framework 3.2.0",
@@ -16991,6 +17003,7 @@ dependencies = [
  "pin-project",
  "prost 0.11.9",
  "prost-derive 0.11.9",
+ "rustls-native-certs 0.6.3",
  "rustls-pemfile",
  "tokio",
  "tokio-rustls 0.23.4",
