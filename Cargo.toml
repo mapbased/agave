@@ -132,7 +132,7 @@ members = [
     "xdp-ebpf",
     "runner",
     "mev-api",
-    "mev-plugins/mev-arb",  "mev-plugins/mev-arb-proxy", "scratch",
+    "mev-plugins/mev-arb",  "mev-plugins/mev-arb-proxy",
 ]
 
 exclude = [
