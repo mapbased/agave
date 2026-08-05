@@ -5824,6 +5824,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-stat"
+version = "0.1.0"
+dependencies = [
+ "ahash 0.8.12",
+ "flexi_logger 0.27.4",
+ "log",
+ "mev-api",
+ "parking_lot 0.12.3",
+ "serde",
+ "serde_json",
+ "solana-account 4.3.1",
+ "solana-pubkey 4.2.0",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"

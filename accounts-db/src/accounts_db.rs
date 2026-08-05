@@ -5778,8 +5778,11 @@ impl AccountsDb {
                     target_slot,
                 );
                 if written {
-                    // Defer the MEV notification to the single batched call below.
-                    mev_batch.push((pubkey, owner, arc_account, account_index as u64));
+                    // Defer the MEV notification to the single batched call below (skip Vote accounts).
+                    const VOTE_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("Vote111111111111111111111111111111111111111");
+                    if owner != VOTE_PROGRAM_ID {
+                        mev_batch.push((pubkey, owner, arc_account, account_index as u64));
+                    }
                 } else {
                     bitset.clear_bit(target_slot, Ordering::AcqRel);
                 }
