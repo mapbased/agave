@@ -138,7 +138,6 @@ members = [
     "mev-plugins/arbitrage/arb-core",
     "mev-plugins/arbitrage/utils",
     "mev-plugins/arbitrage/bloxroute-client",
-    "mev-plugins/arbitrage/jito_searcher_client_arb",
     "mev-plugins/arbitrage/jito_protos_arb",
     "mev-plugins/arbitrage/config",
     "mev-plugins/arbitrage/validators",

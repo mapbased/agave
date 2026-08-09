@@ -5955,27 +5955,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jito_searcher_client_arb"
-version = "0.1.1"
-dependencies = [
- "chrono",
- "futures 0.3.32",
- "futures-util",
- "jito_protos_arb",
- "log",
- "prost-types 0.11.9",
- "rand 0.8.6",
- "serde",
- "solana-commitment-config 3.1.1",
- "solana-metrics 2.3.13",
- "solana-sdk 4.0.1",
- "solana-transaction-status 2.3.13",
- "thiserror 1.0.69",
- "tokio",
- "tonic 0.8.3",
-]
-
-[[package]]
 name = "jni"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -20932,6 +20911,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "solana-client 4.2.0-alpha.0",
  "tokio",
 ]
 
