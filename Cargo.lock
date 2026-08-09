@@ -6694,6 +6694,8 @@ dependencies = [
  "ahash 0.8.12",
  "arb-bot",
  "arb-core",
+ "arc-swap",
+ "bincode",
  "config 0.1.0",
  "crossbeam-channel",
  "flexi_logger 0.27.4",
