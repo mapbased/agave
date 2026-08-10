@@ -6650,6 +6650,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "solana-account 4.3.1",
+ "solana-address-lookup-table-interface 3.1.0",
  "solana-client 4.2.0-alpha.0",
  "solana-program 4.0.0",
  "solana-pubkey 4.2.0",
