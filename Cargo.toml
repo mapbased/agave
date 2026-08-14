@@ -1,9 +1,13 @@
 [workspace]
 members = [
     "account-decoder",
+    "mev-plugins/jito_protos",
+    "mev-plugins/jito_searcher_client",
     "account-decoder-client-types",
     "accounts-cluster-bench",
     "accounts-db",
+    "accounts-in-memory",
+    "art",
     "accounts-db/store-histogram",
     "banking-stage-ingress-types",
     "banks-client",
@@ -125,6 +129,19 @@ members = [
     "watchtower",
     "xdp",
     "xdp-ebpf",
+    "runner",
+    "mev-api",
+    "mev-plugins/mev-arb",  "mev-plugins/mev-arb-proxy", "mev-plugins/mev-alt", "mev-plugins/mev-stat", "mev-plugins/mev-open",
+    "mev-plugins/arbitrage/arb-bot",
+    "mev-plugins/arbitrage/dex",
+    "mev-plugins/arbitrage/arb-core",
+    "mev-plugins/arbitrage/utils",
+    "mev-plugins/arbitrage/bloxroute-client",
+    "mev-plugins/arbitrage/jito_protos_arb",
+    "mev-plugins/arbitrage/config",
+    "mev-plugins/arbitrage/validators",
+    "mev-plugins/arbitrage/nextblock_protos",
+    "mev-plugins/arbitrage/nextblock-client",
 ]
 
 exclude = [
@@ -467,6 +484,7 @@ solana-runtime = { path = "runtime", version = "=4.3.0-beta.3", features = ["aga
 solana-runtime-transaction = { path = "runtime-transaction", version = "=4.3.0-beta.3", features = ["agave-unstable-api"] }
 solana-sanitize = "3.0.1"
 solana-sbpf = { version = "=0.23.0", default-features = false }
+solana-sdk = "4.0.1"
 solana-sdk-ids = "3.1.0"
 solana-secp256k1-program = "3.0.1"
 solana-secp256k1-recover = "3.3.0"
@@ -573,6 +591,7 @@ winreg = "0.55"
 x509-parser = "0.18.1"
 xxhash-rust = "0.8.5"
 zstd = "0.13.3"
+art = { path = "art" }
 
 [profile.dev]
 debug = "line-tables-only"
@@ -623,3 +642,7 @@ codegen-units = 1
 crossbeam-epoch = { git = "https://github.com/anza-xyz/crossbeam", rev = "5ee1c6ec671d94db14ed9238eb99e59a84555aad" }
 librocksdb-sys = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
 rocksdb = { git = "https://github.com/anza-xyz/rust-rocksdb", rev = "4dba80dfe9434e595a971f5b2985ff9ba4fb31e7" }
+
+[profile.release.package.mev-arb-proxy]
+opt-level = "z"
+codegen-units = 1

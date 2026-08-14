@@ -2,7 +2,7 @@
 pub use log;
 use std::{cell::RefCell, rc::Rc};
 
-const LOG_MESSAGES_BYTES_LIMIT: usize = 10 * 1000;
+const LOG_MESSAGES_BYTES_LIMIT: usize = 100 * 1000;
 
 pub struct LogCollector {
     pub messages: Vec<String>,

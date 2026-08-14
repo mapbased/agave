@@ -153,7 +153,16 @@ pub fn process_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) 
     result.and(wait_result)
 }
 
-fn schedule_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) -> Result<()> {
+pub fn schedule_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) -> Result<()> {
+    let mut starting_index = bank.transaction_count().try_into().unwrap();
+    schedule_entries(bank, entries, &mut starting_index)
+}
+
+pub fn schedule_entries(
+    bank: &BankWithScheduler,
+    entries: Vec<Entry>,
+    starting_index: &mut usize,
+) -> Result<()> {
     let validate_and_hash_transaction = {
         let bank = bank.clone_with_scheduler();
         move |versioned_tx: VersionedTransaction,
@@ -170,29 +179,30 @@ fn schedule_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) -> 
     let num_txs = entries.iter().map(|entry| entry.transactions.len()).sum();
     let entry::ValidatedHashedTransactions {
         entries,
-        unverified_signatures,
+        unverified_signatures: _,
     } = entry::validate_and_hash_transactions(
         entries,
         num_txs,
         transaction_hash_verify_thread_pool(),
         validate_and_hash_transaction,
     )?;
-    unverified_signatures.verify()?;
+    // unverified_signatures.verify()?; // SKIPPED for fast replay
 
-    let mut entry_starting_index: usize = bank.transaction_count().try_into().unwrap();
+    let mut entry_starting_index: usize = *starting_index;
     let replay_entries: Vec<_> = entries
         .into_iter()
         .map(|entry| {
-            let starting_index = entry_starting_index;
+            let cur_starting_index = entry_starting_index;
             if let EntryType::Transactions(ref transactions) = entry {
                 entry_starting_index = entry_starting_index.saturating_add(transactions.len());
             }
             ReplayEntry {
                 entry,
-                starting_index,
+                starting_index: cur_starting_index,
             }
         })
         .collect();
+    *starting_index = entry_starting_index;
 
     process_entries(bank, replay_entries)
 }

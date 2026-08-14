@@ -70,7 +70,7 @@ use {
 };
 
 mod obsolete_accounts;
-mod status_cache;
+pub mod status_cache;
 mod storage;
 mod storages_list;
 mod tests;
@@ -108,7 +108,7 @@ pub(crate) struct SlotAccountStorageEntries {
     derive(AbiExample, Serialize, SchemaWrite, StableAbi, StableAbiSample)
 )]
 #[derive(Debug, Deserialize, SchemaRead)]
-pub(crate) struct AccountsDbFields(
+pub struct AccountsDbFields(
     Vec<SlotAccountStorageEntries>,
     u64, // unused, formerly write_version
     Slot,
@@ -539,11 +539,12 @@ impl DeserializableBankSnapshot {
     }
 }
 
-pub(crate) fn fields_from_stream<R: Read>(
+pub fn fields_from_stream<R: Read>(
     snapshot_stream: &mut BufReader<R>,
 ) -> wincode::ReadResult<(BankFieldsToDeserialize, AccountsDbFields)> {
     deserialize_wincode_from::<_, DeserializableBankSnapshot>(snapshot_stream)?.into_fields()
 }
+pub use fields_from_stream as deserialize_bank_fields;
 
 #[cfg(feature = "dev-context-only-utils")]
 pub(crate) fn fields_from_streams(
