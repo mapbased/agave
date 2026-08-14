@@ -890,6 +890,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "art"
+version = "4.4.0-alpha.0"
+dependencies = [
+ "libc",
+ "modular-bitfield",
+ "rand 0.9.4",
+ "windows-sys 0.45.0",
+]
+
+[[package]]
 name = "ascii"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5896,6 +5906,7 @@ dependencies = [
  "serde",
  "smallvec",
  "solana-account 4.6.0",
+ "solana-accounts-in-memory",
  "solana-address-lookup-table-interface",
  "solana-bucket-map",
  "solana-clock",
@@ -5928,6 +5939,27 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "wincode",
+]
+
+[[package]]
+name = "solana-accounts-in-memory"
+version = "4.4.0-alpha.0"
+dependencies = [
+ "art",
+ "blake3",
+ "dashmap",
+ "libc",
+ "log",
+ "lz4",
+ "modular-bitfield",
+ "rayon",
+ "smallvec",
+ "solana-account 4.6.0",
+ "solana-clock",
+ "solana-epoch-schedule",
+ "solana-lattice-hash",
+ "solana-pubkey 4.3.0",
+ "solana-sdk-ids",
 ]
 
 [[package]]
