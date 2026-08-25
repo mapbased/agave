@@ -40,6 +40,7 @@ use {
     solana_cluster_type::ClusterType,
     solana_core::{
         banking_simulation::{BankingSimulator, BankingTraceEvents},
+        cost_update_service::report_cost_tracker_stats,
         resource_limits::adjust_nofile_limit,
         system_monitor_service::{SystemMonitorService, SystemMonitorStatsReportConfig},
         validator::{BlockProductionMethod, BlockVerificationMethod, TransactionStructure},
@@ -638,7 +639,8 @@ fn setup_slot_recording(
                 let cost_tracker = bank.read_cost_tracker().unwrap();
                 let slot = bank.slot();
                 let is_leader_block = false;
-                cost_tracker.report_stats(
+                report_cost_tracker_stats(
+                    &cost_tracker.stats(),
                     slot,
                     is_leader_block,
                     total_transaction_fee,
@@ -2407,6 +2409,97 @@ fn main() {
                         tick_entries.iter().for_each(|tick_entry| {
                             bank.register_tick(&tick_entry.hash, &scheduler);
                         });
+
+                        // Calculate and set the block ID so we can read it to
+                        // properly chain shreds for the child bank
+                        Bank::calculate_and_set_block_id_for_dcou(&bank);
+
+                        // Next steps will need write access to the Blockstore
+                        // so ensure we have R/W access
+                        let rw_blockstore = if blockstore.is_primary_access() {
+                            blockstore.clone()
+                        } else {
+                            Arc::new(open_blockstore(
+                                &ledger_path,
+                                arg_matches,
+                                AccessType::PrimaryForMaintenance,
+                            ))
+                        };
+
+                        // If slot exists, back it up in another Blockstore
+                        // just in case and purge from the Blockstore
+                        let slot = bank.slot();
+                        if blockstore.has_existing_shreds_for_slot(slot) {
+                            let shreds = blockstore
+                                .get_data_shreds_for_slot(slot, 0)
+                                .expect("Blockstore operation must succeed");
+
+                            let old_shred_version =
+                                shreds.first().expect("Slot must have a shred").version();
+                            let backup_directory = format!(
+                                "{BLOCKSTORE_DIRECTORY_ROCKS_LEVEL}_backup_{old_shred_version}_{slot}"
+                            );
+                            let backup_ledger_path = ledger_path.join(backup_directory);
+                            info!("Backing up {slot} at {}", backup_ledger_path.display(),);
+                            let backup_blockstore = Arc::new(open_blockstore(
+                                &backup_ledger_path,
+                                arg_matches,
+                                AccessType::PrimaryForMaintenance,
+                            ));
+                            let mut pinnable_slice = backup_blockstore.new_pinnable_slice();
+                            let mut write_batch = backup_blockstore.get_write_batch();
+                            let _ = backup_blockstore
+                                .insert_cow_shreds(
+                                    shreds.into_iter().map(Cow::Owned),
+                                    true,
+                                    &mut pinnable_slice,
+                                    &mut write_batch,
+                                )
+                                .expect("Blockstore operation must succeed");
+
+                            // Purge modifies state so use rw_blockstore
+                            info!("Purging slot {slot} from Blockstore");
+                            rw_blockstore
+                                .purge_slots_cleanup_chaining(slot, slot, PurgeType::Exact)
+                                .expect("Blockstore operation must succeed");
+                        }
+
+                        // Use a "dummy" but deterministic keyapir to sign
+                        let keypair = keypair_from_seed(&[0; Keypair::SECRET_KEY_LENGTH])
+                            .expect("Keypair creation must succeed");
+                        let chained_merkle_root = bank
+                            .parent()
+                            .expect("Child bank must have parent bank available")
+                            .block_id()
+                            .expect("Parent bank must have block ID set");
+
+                        let shredder = Shredder::new(
+                            slot,
+                            bank.parent_slot(),
+                            /*reference_tick:*/ 0,
+                            new_shred_verison,
+                        )
+                        .expect("Shredder creation must succeed");
+                        let shreds: Vec<_> = shredder
+                            .make_merkle_shreds_from_entries(
+                                &keypair,
+                                &tick_entries,
+                                /*is_last_in_slot:*/ true,
+                                chained_merkle_root,
+                                /*next_shred_index:*/ 0,
+                                /*next_code_index:*/ 0,
+                                &ReedSolomonCache::default(),
+                                &mut ProcessShredsStats::default(),
+                            )
+                            .into_iter()
+                            .filter(Shred::is_data)
+                            .map(Cow::Owned)
+                            .collect();
+                        let mut pinnable_slice = rw_blockstore.new_pinnable_slice();
+                        let mut write_batch = rw_blockstore.get_write_batch();
+                        rw_blockstore
+                            .insert_cow_shreds(shreds, true, &mut pinnable_slice, &mut write_batch)
+                            .expect("Blockstore operation must succeed");
                     }
 
                     let pre_capitalization = bank.capitalization();

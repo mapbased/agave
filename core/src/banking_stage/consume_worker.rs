@@ -112,6 +112,9 @@ impl<Tx: TransactionWithMeta> ConsumeWorker<Tx> {
         let bank = leader_state
             .working_bank()
             .expect("active_leader_state should only return an active bank");
+        if bank.slot() != work.target_slot {
+            return Ok(ProcessingStatus::CouldNotProcess(work));
+        }
         self.metrics
             .count_metrics
             .num_messages_processed
@@ -220,7 +223,7 @@ pub(crate) mod external {
         },
         solana_svm_transaction::svm_message::SVMMessage,
         solana_transaction::TransactionError,
-        std::ptr::NonNull,
+        std::{num::NonZeroUsize, ptr::NonNull},
     };
 
     #[derive(Debug, Error)]
@@ -311,29 +314,19 @@ pub(crate) mod external {
             should_drain_executes: &mut bool,
         ) -> Result<IterationResult, ExternalConsumeWorkerError> {
             self.allocator.clean_remote_free_lists();
-            if receiver.is_empty() {
-                receiver.sync();
-                *should_drain_executes = false;
+            let capacity = NonZeroUsize::new(receiver.capacity())
+                .expect("shaq queue capacity must be non-zero");
+            let Some(messages) = receiver.try_reserve_read_batch(capacity) else {
+                return Ok(IterationResult::Idle);
+            };
+
+            *should_drain_executes = false;
+            for message in messages {
+                // If the bank is unavailable, drain executes for the remainder of the batch.
+                *should_drain_executes |= self.process_message(&message, *should_drain_executes)?;
             }
 
-            match receiver.try_read() {
-                Some(message) => {
-                    self.sender.sync();
-
-                    // Process message, if bank is unavailable enable draining for the
-                    // remainder of the current batch (i.e. what our `receiver.sync()`
-                    // fetched).
-                    *should_drain_executes |=
-                        self.process_message(message, *should_drain_executes)?;
-
-                    // Publish our send & read offsets.
-                    self.sender.commit();
-                    receiver.finalize();
-
-                    Ok(IterationResult::ProcessedMessage)
-                }
-                None => Ok(IterationResult::Idle),
-            }
+            Ok(IterationResult::ProcessedMessage)
         }
 
         /// Return true if fetching a bank for execution timed out.
@@ -904,13 +897,8 @@ pub(crate) mod external {
                 );
 
                 let fee_payer_balance = working_bank
-                    .rc
-                    .accounts
-                    .load_with_fixed_root(
-                        &working_bank.ancestors,
-                        &transaction.static_account_keys()[0],
-                    )
-                    .map(|(account, _slot)| account.lamports())
+                    .get_account_with_fixed_root(&transaction.static_account_keys()[0])
+                    .map(|account| account.lamports())
                     .unwrap_or(0);
 
                 let response = &mut responses[transaction_index];
@@ -1184,7 +1172,6 @@ pub(crate) mod external {
 
             fn send_message(&mut self, message: PackToWorkerMessage) {
                 self.pack_to_worker.try_write(message).unwrap();
-                self.pack_to_worker.commit();
             }
 
             fn iterate(&mut self) -> Result<(), ExternalConsumeWorkerError> {
@@ -1196,10 +1183,7 @@ pub(crate) mod external {
             }
 
             fn recv_response(&mut self) -> WorkerToPackMessage {
-                self.worker_to_pack.sync();
-                let message = *self.worker_to_pack.try_read().unwrap();
-                self.worker_to_pack.finalize();
-                message
+                self.worker_to_pack.try_read().unwrap()
             }
 
             fn execution_responses(
@@ -2155,10 +2139,6 @@ pub(crate) mod external {
                 not_included_reasons::BANK_NOT_AVAILABLE
             );
 
-            test_frame.enable_execution();
-            test_frame.iterate().unwrap();
-            assert!(test_frame.should_drain_executes);
-
             let response = test_frame.recv_response();
             assert_eq!(response.processed_code, processed_codes::PROCESSED);
             let responses = test_frame.execution_responses(&response.responses);
@@ -2305,7 +2285,6 @@ pub(crate) mod external {
                 not_included_reasons::NONE
             );
 
-            test_frame.iterate().unwrap();
             let second = test_frame.recv_response();
             assert_eq!(second.batch, check_batch.region);
             let second_responses = test_frame.check_responses(&second.responses);
@@ -3028,6 +3007,7 @@ mod tests {
             alt_invalidation_slot: bank.slot(),
         };
         let work = ConsumeWork {
+            target_slot: bank.slot(),
             batch_id: bid,
             ids: vec![id],
             transactions,
@@ -3070,6 +3050,7 @@ mod tests {
             )]);
             consume_sender
                 .send(ConsumeWork {
+                    target_slot: bank.slot(),
                     batch_id: TransactionBatchId::new(i as u64),
                     ids: vec![i],
                     transactions,
@@ -3095,6 +3076,64 @@ mod tests {
         }
 
         // Cleanup.
+        drop(test_frame);
+        let _ = worker_thread.join().unwrap();
+    }
+
+    #[test]
+    fn test_worker_consume_wrong_slot() {
+        let (mut test_frame, worker) = setup_test_frame();
+        let metrics = worker.metrics_handle();
+        let TestFrame {
+            mint_keypair,
+            genesis_config,
+            bank,
+            shared_leader_state,
+            consume_sender,
+            consumed_receiver,
+            ..
+        } = &mut test_frame;
+        shared_leader_state.store(Arc::new(LeaderState::new(
+            Some(bank.clone()),
+            bank.tick_height(),
+            None,
+            None,
+        )));
+        let worker_thread = std::thread::spawn(move || worker.run());
+
+        let transactions = sanitize_transactions(vec![system_transaction::transfer(
+            mint_keypair,
+            &Pubkey::new_unique(),
+            1,
+            genesis_config.hash(),
+        )]);
+        consume_sender
+            .send(ConsumeWork {
+                target_slot: bank.slot() + 1,
+                batch_id: TransactionBatchId::new(0),
+                ids: vec![0],
+                transactions,
+                max_ages: vec![MaxAge {
+                    sanitized_epoch: bank.epoch(),
+                    alt_invalidation_slot: bank.slot(),
+                }],
+            })
+            .unwrap();
+
+        let consumed = consumed_receiver.recv().unwrap();
+        assert_eq!(consumed.work.target_slot, bank.slot() + 1);
+        assert_eq!(
+            consumed.retryable_indexes,
+            vec![RetryableIndex::new(0, true)]
+        );
+        assert_eq!(
+            metrics
+                .count_metrics
+                .num_messages_processed
+                .load(Ordering::Relaxed),
+            0
+        );
+
         drop(test_frame);
         let _ = worker_thread.join().unwrap();
     }
@@ -3136,6 +3175,7 @@ mod tests {
             alt_invalidation_slot: bank.slot(),
         };
         let work = ConsumeWork {
+            target_slot: bank.slot(),
             batch_id: bid,
             ids: vec![id],
             transactions,
@@ -3191,6 +3231,7 @@ mod tests {
         };
         consume_sender
             .send(ConsumeWork {
+                target_slot: bank.slot(),
                 batch_id: bid,
                 ids: vec![id1, id2],
                 transactions: txs,
@@ -3257,6 +3298,7 @@ mod tests {
         };
         consume_sender
             .send(ConsumeWork {
+                target_slot: bank.slot(),
                 batch_id: bid1,
                 ids: vec![id1],
                 transactions: txs1,
@@ -3266,6 +3308,7 @@ mod tests {
 
         consume_sender
             .send(ConsumeWork {
+                target_slot: bank.slot(),
                 batch_id: bid2,
                 ids: vec![id2],
                 transactions: txs2,
@@ -3383,6 +3426,7 @@ mod tests {
 
         consume_sender
             .send(ConsumeWork {
+                target_slot: bank.slot(),
                 batch_id: TransactionBatchId::new(1),
                 ids: vec![0, 1, 2, 3, 4, 5],
                 transactions: txs,

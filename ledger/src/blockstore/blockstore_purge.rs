@@ -136,7 +136,7 @@ impl Blockstore {
         let Some(mut slot_meta) = self.meta(slot)? else {
             return Err(BlockstoreError::SlotUnavailable);
         };
-        let mut write_batch = self.get_write_batch()?;
+        let mut write_batch = self.get_write_batch();
 
         self.purge_range(
             &mut write_batch,
@@ -193,7 +193,7 @@ impl Blockstore {
         cleanup_chaining: bool,
         purge_stats: &mut PurgeStats,
     ) -> Result<()> {
-        let mut write_batch = self.get_write_batch()?;
+        let mut write_batch = self.get_write_batch();
 
         let mut delete_range_timer = Measure::start("delete_range");
         self.purge_range(
@@ -460,13 +460,13 @@ impl Blockstore {
         }
 
         for slot in from_slot..=to_slot {
-            let mut slot_components =
-                self.get_slot_components_with_shred_info(slot, 0, /*allow_dead_slots:*/ true);
+            let mut slot_components = self
+                .get_slot_component_views_with_shred_info(slot, 0, /*allow_dead_slots:*/ true);
             if slot_components.is_err()
                 && let Ok(Some(slot_meta)) = self.meta(slot)
                 && slot_meta.has_update_parent()
             {
-                slot_components = self.get_slot_components_with_shred_info(
+                slot_components = self.get_slot_component_views_with_shred_info(
                     slot,
                     u64::from(slot_meta.replay_fec_set_index),
                     /*allow_dead_slots:*/ true,
@@ -478,10 +478,10 @@ impl Blockstore {
             let mut transaction_index = 0usize;
             for component in slot_components {
                 match component {
-                    BlockComponent::EntryBatch(entries) => {
+                    ParsedBlockComponent::EntryBatch(entries) => {
                         for transaction in entries.into_iter().flat_map(|entry| entry.transactions)
                         {
-                            if let Some(&signature) = transaction.signatures.first() {
+                            if let Some(&signature) = transaction.signatures().first() {
                                 self.transaction_status_cf
                                     .delete_in_batch(batch, (signature, slot));
                                 self.transaction_memos_cf
@@ -490,7 +490,7 @@ impl Blockstore {
                                 let meta = self.read_transaction_status((signature, slot))?;
                                 let loaded_addresses = meta.map(|meta| meta.loaded_addresses);
                                 let account_keys = AccountKeys::new(
-                                    transaction.message.static_account_keys(),
+                                    transaction.static_account_keys(),
                                     loaded_addresses.as_ref(),
                                 );
 
@@ -506,10 +506,10 @@ impl Blockstore {
                             transaction_index += 1;
                         }
                     }
-                    BlockComponent::BlockMarker(marker) if marker.is_update_parent() => {
+                    ParsedBlockComponent::BlockMarker(marker) if marker.is_update_parent() => {
                         transaction_index = 0;
                     }
-                    BlockComponent::BlockMarker(_) => {}
+                    ParsedBlockComponent::BlockMarker(_) => {}
                 }
             }
         }
@@ -1184,7 +1184,7 @@ pub mod tests {
         );
         blockstore.insert_shreds(shreds, false).unwrap();
 
-        let mut write_batch = blockstore.get_write_batch().unwrap();
+        let mut write_batch = blockstore.get_write_batch();
         blockstore
             .purge_special_columns_exact(&mut write_batch, slot, slot + 1)
             .unwrap();
