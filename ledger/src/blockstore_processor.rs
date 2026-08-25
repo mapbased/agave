@@ -1,4 +1,3 @@
-#[cfg(any(test, feature = "dev-context-only-utils"))]
 use solana_entry::entry::{Entry, entry_views_for_tests};
 use {
     crate::{
@@ -161,7 +160,16 @@ pub fn process_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) 
 }
 
 #[cfg(feature = "dev-context-only-utils")]
-fn schedule_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) -> Result<()> {
+pub fn schedule_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) -> Result<()> {
+    let mut starting_index = bank.transaction_count().try_into().unwrap();
+    schedule_entries(bank, entries, &mut starting_index)
+}
+
+pub fn schedule_entries(
+    bank: &BankWithScheduler,
+    entries: Vec<Entry>,
+    starting_index: &mut usize,
+) -> Result<()> {
     let validate_and_hash_transaction = {
         let bank = bank.clone_with_scheduler();
         move |unsanitized: UnsanitizedTransactionView<Bytes>| {

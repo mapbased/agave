@@ -774,13 +774,13 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "art"
-version = "4.4.0-alpha.0"
+version = "4.4.0-alpha.1"
 dependencies = [
  "libc",
  "modular-bitfield",
  "parking_lot 0.12.5",
  "rand 0.9.4",
- "windows-sys 0.45.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5724,7 +5724,7 @@ dependencies = [
 
 [[package]]
 name = "solana-accounts-in-memory"
-version = "4.4.0-alpha.0"
+version = "4.4.0-alpha.1"
 dependencies = [
  "art",
  "blake3",

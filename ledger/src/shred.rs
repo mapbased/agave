@@ -853,12 +853,8 @@ pub fn recover(
     shreds: Vec<Shred>,
     reed_solomon_cache: &ReedSolomonCache,
 ) -> Result<Box<dyn Iterator<Item = Result<Shred, Error>>>, Error> {
-    let merkle_shreds = shreds
-        .into_iter()
-        .map(merkle::Shred::try_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let recovered = merkle::recover(merkle_shreds, reed_solomon_cache)?;
-    Ok(Box::new(recovered.map(|r| r.map(Shred::from))))
+    let recovered = merkle::recover(shreds, reed_solomon_cache)?;
+    Ok(Box::new(recovered))
 }
 
 #[cfg(test)]

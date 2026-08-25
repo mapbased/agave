@@ -28,6 +28,7 @@ pub use accounts_db_config::{
 };
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
+use smallvec::SmallVec;
 use {
     crate::{
         account_info::{AccountInfo, Offset, StorageLocation},
@@ -3248,6 +3249,7 @@ impl AccountsDb {
         pubkey: &Pubkey,
         _load_hint: LoadHint,
         populate_read_cache: PopulateReadCache,
+        load_filter: Option<impl Fn(u64, &Pubkey, usize) -> bool>,
     ) -> Option<(AccountSharedData, Slot)> {
         use solana_accounts_in_memory::slot_cache::AccountBag;
 
@@ -3286,12 +3288,27 @@ impl AccountsDb {
                 if arc_account.is_zero_lamport() {
                     return None;
                 }
+                if let Some(filter )=load_filter{
+                  if !  filter(arc_account.lamports(),arc_account.owner(),arc_account.data().len()){
+                      return None
+                  }
+                }
+
                 return Some(((*arc_account).clone(), found_slot));
             }
         }
 
         // 2. Fallback to ART-tree
-        self.load_fromdb(pubkey, current_slot, populate_read_cache)
+        let acount_slot=self.load_fromdb(pubkey, current_slot, populate_read_cache);
+        if let Some(f)=load_filter  {
+          if   let Some( (a,slot))=&acount_slot {
+              if !f(a.lamports(), a.owner(), a.data().len()) {
+                  return None
+              }
+          }
+        }
+
+        acount_slot
     }
     fn _do_load(
         &self,
@@ -3723,35 +3740,7 @@ impl AccountsDb {
         }
         Self::write_account_hash_input(account, pubkey, accumulator.start_message()).finish();
     }
-    // todo check if can remove this function
-    /// Hashes `account` and returns the underlying Hasher
-    pub fn hash_account_helper(account: &impl ReadableAccount, pubkey: &Pubkey) -> blake3::Hasher {
-        let mut hasher = blake3::Hasher::new();
 
-        // allocate a buffer on the stack that's big enough
-        // to hold a token account or a stake account
-        const META_SIZE: usize = 8 /* lamports */ + 1 /* executable */ + 32 /* owner */ + 32 /* pubkey */;
-        const DATA_SIZE: usize = 200; // stake accounts are 200 B and token accounts are 165-182ish B
-        const BUFFER_SIZE: usize = META_SIZE + DATA_SIZE;
-        let mut buffer = SmallVec::<[u8; BUFFER_SIZE]>::new();
-
-        // collect lamports into buffer to hash
-        buffer.extend_from_slice(&account.lamports().to_le_bytes());
-
-        let data = account.data();
-        if data.len() > DATA_SIZE {
-            // For larger accounts whose data can't fit into the buffer, update the hash now.
-            hasher.update(&buffer);
-            buffer.clear();
-
-            // hash account's data
-            hasher.update(data);
-        } else {
-            // For small accounts whose data can fit into the buffer, append it to the buffer.
-            buffer.extend_from_slice(data);
-        }
-        Self::write_account_hash_input(account, pubkey, accumulator.start_message()).finish();
-    }
 
     /// The single source of truth for the per-account hash input layout.
     #[inline]
