@@ -59,6 +59,7 @@ pub struct Entry {
     pub transactions: Vec<VersionedTransaction>,
 }
 
+#[derive(Clone)]
 pub struct EntryView<D: TransactionData> {
     /// The number of hashes since the previous Entry ID.
     pub num_hashes: u64,

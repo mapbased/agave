@@ -1,3 +1,4 @@
+#[cfg(feature = "dev-context-only-utils")]
 use solana_entry::entry::{Entry, entry_views_for_tests};
 use {
     crate::{
@@ -162,12 +163,13 @@ pub fn process_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) 
 #[cfg(feature = "dev-context-only-utils")]
 pub fn schedule_entries_for_tests(bank: &BankWithScheduler, entries: Vec<Entry>) -> Result<()> {
     let mut starting_index = bank.transaction_count().try_into().unwrap();
-    schedule_entries(bank, entries, &mut starting_index)
+    let views = entry_views_for_tests(entries);
+    schedule_entries(bank, views, &mut starting_index)
 }
 
 pub fn schedule_entries(
     bank: &BankWithScheduler,
-    entries: Vec<Entry>,
+    entries: Vec<EntryView<Bytes>>,
     starting_index: &mut usize,
 ) -> Result<()> {
     let validate_and_hash_transaction = {
@@ -178,7 +180,6 @@ pub fn schedule_entries(
     };
 
     let num_txs = entries.iter().map(|entry| entry.transactions.len()).sum();
-    let entries = entry_views_for_tests(entries);
     let entry::ValidatedHashedTransactions {
         entries,
         unverified_signatures: _,
