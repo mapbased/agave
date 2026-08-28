@@ -366,6 +366,7 @@ mod tests {
         agave_votor_messages::{
             certificate::{Certificate, CertificateType},
             consensus_message::{ConsensusMessage, VoteMessage},
+            migration::MigrationStatus,
             vote::Vote,
         },
         agave_votor_transport::{
@@ -560,6 +561,7 @@ mod tests {
             client_socket,
             ingress_sender,
             peer_list_receiver,
+            SocketAddrSpace::Unspecified,
             votor_rate_limit_pps(),
             CancellationToken::new(),
         )
@@ -606,6 +608,7 @@ mod tests {
                 spy_listener.0,
                 Some(spy_listener.1),
             )]))),
+            Arc::new(MigrationStatus::post_migration_status()),
         );
         (
             VotingService::new(

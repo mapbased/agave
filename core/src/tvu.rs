@@ -331,6 +331,7 @@ impl Tvu {
             votor_peer_list_sender,
             sharable_banks.clone(),
             votor_peer_overrides,
+            migration_status.clone(),
         );
         let (votor_egress, endpoint) = QuicDatagramEndpoint::spawn(
             &votor_rt_handle,
@@ -339,6 +340,7 @@ impl Tvu {
             votor_client_socket,
             votor_ingress_sender,
             votor_peer_list_receiver,
+            *cluster_info.socket_addr_space(),
             votor_rate_limit_pps(),
             cancel,
         )
