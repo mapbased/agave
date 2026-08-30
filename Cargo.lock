@@ -6764,6 +6764,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-ng"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "art",
+ "crossbeam-channel",
+ "log",
+ "parking_lot 0.12.3",
+ "smallvec",
+ "solana-account 4.6.0",
+ "solana-pubkey 4.3.0",
+]
+
+[[package]]
 name = "mev-open"
 version = "0.1.0"
 dependencies = [
