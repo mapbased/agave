@@ -6771,6 +6771,7 @@ dependencies = [
  "art",
  "crossbeam-channel",
  "log",
+ "mev-api",
  "parking_lot 0.12.3",
  "smallvec",
  "solana-account 4.6.0",
