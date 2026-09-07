@@ -1512,8 +1512,13 @@ impl ClusterInfo {
         gossip_validators: Option<HashSet<Pubkey>>,
         exit: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
+        let num_threads = if crate::crds_filter::is_gossip_minimal_mode() {
+            1
+        } else {
+            std::cmp::min(get_thread_count(), 8)
+        };
         let thread_pool = ThreadPoolBuilder::new()
-            .num_threads(std::cmp::min(get_thread_count(), 8))
+            .num_threads(num_threads)
             .thread_name(|i| format!("solGossipRun{i:02}"))
             .build()
             .unwrap();
@@ -2088,6 +2093,9 @@ impl ClusterInfo {
         for (from_addr, packet) in packets.drain(..).flatten() {
             match packet {
                 Protocol::PullRequest(filter, caller) => {
+                    if crate::crds_filter::is_gossip_minimal_mode() {
+                        continue;
+                    }
                     if !check_pull_request_shred_version(self_shred_version, &caller) {
                         self.stats.skip_pull_shred_version.add_relaxed(1);
                         continue;
@@ -2183,10 +2191,11 @@ impl ClusterInfo {
             sigverify_cache: &SigVerifyCache,
             is_full_alpenglow_epoch: bool,
         ) -> Option<(SocketAddr, Protocol)> {
-            let result: wincode::ReadResult<Protocol> = packet
-                .data(..)
-                .ok_or(wincode::ReadError::Custom("packet discarded"))
-                .and_then(deserialize_protocol);
+            let data = packet.data(..)?;
+            if crate::crds_filter::should_pre_drop_gossip_packet(data) {
+                return None;
+            }
+            let result: wincode::ReadResult<Protocol> = deserialize_protocol(data);
             let mut protocol: Protocol = stats.record_received_packet(result)?;
             protocol.sanitize().ok()?;
             if let Protocol::PullResponse(_, values) | Protocol::PushMessage(_, values) =
@@ -2305,8 +2314,13 @@ impl ClusterInfo {
         sender: impl ChannelSend<Vec<(/*from:*/ SocketAddr, Protocol)>>,
         exit: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
+        let cons_threads = if crate::crds_filter::is_gossip_minimal_mode() {
+            1
+        } else {
+            get_thread_count().min(8)
+        };
         let thread_pool = ThreadPoolBuilder::new()
-            .num_threads(get_thread_count().min(8))
+            .num_threads(cons_threads)
             .thread_name(|i| format!("solGossipCons{i:02}"))
             .build()
             .unwrap();
@@ -2345,8 +2359,13 @@ impl ClusterInfo {
         exit: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         let recycler = PacketBatchRecycler::default();
+        let work_threads = if crate::crds_filter::is_gossip_minimal_mode() {
+            1
+        } else {
+            get_thread_count().min(8)
+        };
         let thread_pool = ThreadPoolBuilder::new()
-            .num_threads(get_thread_count().min(8))
+            .num_threads(work_threads)
             .thread_name(|i| format!("solGossipWork{i:02}"))
             .build()
             .unwrap();
