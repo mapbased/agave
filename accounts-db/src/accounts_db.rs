@@ -648,7 +648,7 @@ pub enum PopulateReadCache {
 pub enum LoadedAccountAccessor {
     // StoredAccountInfo can't be held directly here due to its lifetime dependency on
     // AccountStorageEntry
-    Stored(Option<(Arc<AccountStorageEntry>, usize)>),
+    Stored(Option<(Arc<AccountStorageEntry>, Offset)>),
 }
 
 impl LoadedAccountAccessor {
@@ -1164,7 +1164,7 @@ impl AccountsDb {
     fn collect_reclaims(
         &self,
         pubkey: &Pubkey,
-        max_clean_root_inclusive: Option<Slot>,
+        max_clean_root_inclusive: Slot,
     ) -> ReclaimsWithNewestSlot<AccountInfo> {
         let mut clean_rooted = Measure::start("clean_old_root-ms");
         let mut reclaims = ReclaimsWithNewestSlot::new();
@@ -1361,14 +1361,12 @@ impl AccountsDb {
     /// Collect all the uncleaned slots, up to a max slot
     ///
     /// Search through the uncleaned Pubkeys and return all the slots, up to a maximum slot.
-    fn collect_uncleaned_slots_up_to_slot(&self, max_slot_inclusive: Option<Slot>) -> Vec<Slot> {
+    fn collect_uncleaned_slots_up_to_slot(&self, max_slot_inclusive: Slot) -> Vec<Slot> {
         self.uncleaned_pubkeys
             .iter()
             .filter_map(|entry| {
                 let slot = *entry.key();
-                max_slot_inclusive
-                    .is_none_or(|max_slot_inclusive| slot <= max_slot_inclusive)
-                    .then_some(slot)
+                (slot <= max_slot_inclusive).then_some(slot)
             })
             .collect()
     }
@@ -1378,7 +1376,7 @@ impl AccountsDb {
     /// pubkeys to `candidates` for cleaning.
     fn remove_uncleaned_slots_up_to_slot_and_move_pubkeys(
         &self,
-        max_slot_inclusive: Option<Slot>,
+        max_slot_inclusive: Slot,
         candidates: &[RwLock<CleaningCandidatesBin>],
     ) {
         let uncleaned_slots = self.collect_uncleaned_slots_up_to_slot(max_slot_inclusive);
@@ -1413,18 +1411,11 @@ impl AccountsDb {
         }
     }
 
-    fn count_pubkeys(candidates: &[RwLock<CleaningCandidatesBin>]) -> u64 {
-        candidates
-            .iter()
-            .map(|x| x.read().unwrap().len())
-            .sum::<usize>() as u64
-    }
-
     /// Construct a list of candidates for cleaning from:
     /// - uncleaned_pubkeys -- the delta set of updated pubkeys in rooted slots from the last clean
     fn construct_candidate_clean_keys(
         &self,
-        max_clean_root_inclusive: Option<Slot>,
+        max_clean_root_inclusive: Slot,
         timings: &mut CleanKeyTimings,
     ) -> CleaningCandidates {
         let num_bins = self.accounts_index.bins();
@@ -1510,15 +1501,13 @@ impl AccountsDb {
     /// this is very slow
     /// this function will call Rayon par_iter, so you will want to have thread pool installed if
     /// you want to call this without consuming all the cores on the CPU.
-    fn verify_index(&self, max_slot_inclusive: Option<Slot>) {
-        info!("verifying index as of slot: {max_slot_inclusive:?}");
+    fn verify_index(&self, max_slot_inclusive: Slot) {
+        info!("verifying index as of slot: {max_slot_inclusive}");
         let pubkey_slot_lists = DashMap::<Pubkey, Vec<Slot>, PubkeyHasherBuilder>::default();
         let mut storages = self.storage.all_storages();
-        // Flush is not running while we verify, so storages are stable. With no slot bound we
-        // verify every storage; otherwise we drop storages newer than the bound.
-        if let Some(max_slot_inclusive) = max_slot_inclusive {
-            storages.retain(|s| s.slot() <= max_slot_inclusive);
-        }
+        // Flush is not running while we verify, so storages are stable. Drop storages newer
+        // than the bound.
+        storages.retain(|s| s.slot() <= max_slot_inclusive);
         // populate
         storages.par_iter().for_each_init(
             || Box::new(append_vec::new_scan_accounts_reader()),
@@ -1574,11 +1563,7 @@ impl AccountsDb {
                             let mut index_slots = slot_list
                                 .iter()
                                 .map(|(slot, _)| *slot)
-                                .filter(|slot| {
-                                    max_slot_inclusive.is_none_or(|max_slot_inclusive| {
-                                        *slot <= max_slot_inclusive
-                                    })
-                                })
+                                .filter(|slot| *slot <= max_slot_inclusive)
                                 .collect::<Vec<_>>();
                             index_slots.sort_unstable();
 
@@ -1605,13 +1590,12 @@ impl AccountsDb {
     // collection
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
-    pub fn clean_accounts(&self, max_clean_root_inclusive: Option<Slot>, is_startup: bool) {
+    pub fn clean_accounts_old(&self, max_clean_root_inclusive: Slot, is_startup: bool) {
         return;
     }
-    fn clean_accounts_old(&self, max_clean_root_inclusive: Option<Slot>, is_startup: bool) {
-
-    if self.verify_index {
-            //at startup use all cores to verify refcounts
+    pub fn clean_accounts_old(&self, max_clean_root_inclusive: Slot, is_startup: bool) {
+        if self.verify_index {
+            //at startup use all cores to verify the index
             if is_startup {
                 self.verify_index(max_clean_root_inclusive);
             } else {
@@ -1626,7 +1610,9 @@ impl AccountsDb {
         let purges_old_accounts_count = AtomicU64::default();
 
         let mut measure_all = Measure::start("clean_accounts");
-        let max_clean_root_inclusive = self.max_clean_root(max_clean_root_inclusive);
+        let max_clean_root_inclusive = self
+            .max_clean_root(Some(max_clean_root_inclusive))
+            .expect("max_clean_root_inclusive must be Some");
 
         self.report_store_stats();
 
@@ -1645,12 +1631,12 @@ impl AccountsDb {
         measure_construct_candidates.stop();
         drop(active_guard);
 
-        let num_candidates = Self::count_pubkeys(&candidates);
+        let num_candidates = candidates.iter().map(|x| x.read().unwrap().len()).sum();
         let found_not_zero_accum = AtomicU64::new(0);
         let not_found_on_fork_accum = AtomicU64::new(0);
         let missing_accum = AtomicU64::new(0);
         let useful_accum = AtomicU64::new(0);
-        let reclaims = ReclaimsWithNewestSlot::with_capacity(num_candidates as usize);
+        let reclaims = ReclaimsWithNewestSlot::with_capacity(num_candidates);
         let reclaims = Mutex::new(reclaims);
         // parallel scan the index.
         let do_clean_scan = || {
@@ -1674,7 +1660,7 @@ impl AccountsDb {
                                 let index_in_slot_list = self.accounts_index.latest_slot(
                                     None,
                                     slot_list,
-                                    max_clean_root_inclusive,
+                                    Some(max_clean_root_inclusive),
                                 );
 
                                 match index_in_slot_list {
@@ -1693,9 +1679,7 @@ impl AccountsDb {
 
                                         // If this candidate has multiple rooted slot list entries,
                                         // we should reclaim the older ones.
-                                        if slot_list.len() > 1
-                                            && *slot
-                                                <= max_clean_root_inclusive.unwrap_or(Slot::MAX)
+                                        if slot_list.len() > 1 && *slot <= max_clean_root_inclusive
                                         {
                                             should_collect_reclaims = true;
                                             purges_old_accounts_local += 1;
@@ -1764,14 +1748,18 @@ impl AccountsDb {
         self.clean_accounts_stats.report();
         datapoint_info!(
             "clean_accounts",
-            ("max_clean_root", max_clean_root_inclusive, Option<i64>),
+            ("max_clean_root", max_clean_root_inclusive, i64),
             ("total_us", measure_all.as_us(), i64),
             (
                 "collect_delta_keys_us",
                 key_timings.collect_delta_keys_us,
                 i64
             ),
-            ("construct_candidates_us", measure_construct_candidates.as_us(), i64),
+            (
+                "construct_candidates_us",
+                measure_construct_candidates.as_us(),
+                i64
+            ),
             (
                 "handle_pubkeys_removed_from_cache_us",
                 handle_pubkeys_removed_from_cache_us,
@@ -1784,7 +1772,11 @@ impl AccountsDb {
                 key_timings.zero_lamport_single_ref_slots_added_to_shrink_count,
                 i64
             ),
-            ("zero_lamport_sweep_us", key_timings.zero_lamport_sweep_us, i64),
+            (
+                "zero_lamport_sweep_us",
+                key_timings.zero_lamport_sweep_us,
+                i64
+            ),
             ("useful_keys", useful_accum.load(Ordering::Relaxed), i64),
             ("total_keys_count", num_candidates, i64),
             (
@@ -1861,7 +1853,8 @@ impl AccountsDb {
             ),
             (
                 "max_distance_to_min_scan_slot",
-                self.scan_tracker.max_distance_to_min_scan_slot
+                self.scan_tracker
+                    .max_distance_to_min_scan_slot
                     .swap(0, Ordering::Relaxed),
                 i64
             ),
@@ -4457,46 +4450,20 @@ impl AccountsDb {
         &self,
         accounts: &impl StorableAccounts<'a>,
         store_account: &BitVec,
-        update_index_thread_selection: UpdateIndexThreadSelection,
     ) {
         if !self.account_indexes.is_empty() {
-            let len = accounts.len();
             assert_eq!(accounts.len() as u64, store_account.len());
-
-            // Cache writes do not upsert the accounts index; it only ever holds storage entries,
-            // populated on flush. Readers find cache-only accounts through the write cache. Only
-            // the secondary indexes are updated here.
-            let update = |start, end| {
-                (start..end).for_each(|i| {
-                    if store_account[i as u64] {
-                        accounts.account(i, |account| {
-                            self.accounts_index.update_secondary_indexes(
-                                account.pubkey(),
-                                &account,
-                                &self.account_indexes,
-                            );
-                        });
-                    }
-                });
-            };
-
-            let threshold = 1;
-            if matches!(
-                update_index_thread_selection,
-                UpdateIndexThreadSelection::PoolWithThreshold,
-            ) && len > threshold
-            {
-                let chunk_size = len.div_ceil(self.thread_pool_foreground.current_num_threads());
-                let batches = 1 + len / chunk_size;
-                self.thread_pool_foreground.install(|| {
-                    (0..batches).into_par_iter().for_each(|batch| {
-                        let start = batch * chunk_size;
-                        let end = std::cmp::min(start + chunk_size, len);
-                        update(start, end)
-                    })
-                });
-            } else {
-                update(0, len);
+            for i in 0..accounts.len() {
+                if store_account[i as u64] {
+                    let pubkey = accounts.pubkey(i);
+                    accounts.account(i, |account| {
+                        self.accounts_index.update_secondary_indexes(
+                            pubkey,
+                            &account,
+                            &self.account_indexes,
+                        );
+                    });
+                }
             }
         }
     }
@@ -4801,12 +4768,10 @@ impl AccountsDb {
 
     /// Stores accounts in the write cache and updates the index.
     /// This should only be used for accounts that are unrooted (unfrozen)
-
     pub(crate) fn store_accounts_unfrozen<'a>(
         &self,
         accounts: impl StorableAccounts<'a>,
-        _update_index_thread_selection: UpdateIndexThreadSelection,
-        _ancestors: &Ancestors,
+        ancestors: &Ancestors,
     ) {
         use solana_accounts_in_memory::slot_cache::AccountBag;
 
@@ -4914,11 +4879,11 @@ impl AccountsDb {
         // Return the buffer to the pool (drops the Arcs, keeps capacity).
         mev_batch.clear();
         MEV_BATCH_BUF.with(|cell| *cell.borrow_mut() = mev_batch);
+
     }
     pub(crate) fn _store_accounts_unfrozen<'a>(
         &self,
         accounts: impl StorableAccounts<'a>,
-        update_index_thread_selection: UpdateIndexThreadSelection,
         ancestors: &Ancestors,
     ) {
         // If all transactions in a batch are errored,
@@ -4936,11 +4901,7 @@ impl AccountsDb {
         // Update the secondary index
         if !self.account_indexes.is_empty() {
             let update_secondary_index_time = Measure::start("update_secondary_index");
-            self.update_secondary_index_cached_accounts(
-                &accounts,
-                &store_account,
-                update_index_thread_selection,
-            );
+            self.update_secondary_index_cached_accounts(&accounts, &store_account);
             let update_secondary_index_us = update_secondary_index_time.end_as_us();
             self.store_accounts_unfrozen_stats
                 .update_secondary_index_us
@@ -6238,13 +6199,6 @@ enum MarkAccountsObsolete {
     No,
 }
 
-pub enum UpdateIndexThreadSelection {
-    /// Use current thread only
-    Inline,
-    /// Use a thread-pool if the number of updates exceeds a threshold
-    PoolWithThreshold,
-}
-
 // These functions/fields are only usable from a dev context (i.e. tests and benches)
 #[cfg(feature = "dev-context-only-utils")]
 impl AccountStorageEntry {
@@ -6281,7 +6235,15 @@ impl AccountsDb {
 
     /// Call clean_accounts() with the common parameters that tests/benches use.
     pub fn clean_accounts_for_tests(&self) {
-        self.clean_accounts(None, false)
+        // Find the largest storage, to pass it into clean so all
+        // storages are cleaned
+        let max_storage_slot = self
+            .storage
+            .iter()
+            .map(|(slot, _storage)| slot)
+            .max()
+            .unwrap_or_default();
+        self.clean_accounts(max_storage_slot, false)
     }
 
     pub fn flush_accounts_cache_slot_for_tests(&self, slot: Slot) {
@@ -6374,18 +6336,10 @@ impl AccountsDb {
         }
 
         // Pre-populate new zero-lamport accounts with single-lamport placeholders.
-        self.store_accounts_unfrozen(
-            (slot, pre_populate_zero_lamport.as_slice()),
-            UpdateIndexThreadSelection::PoolWithThreshold,
-            &ancestors,
-        );
+        self.store_accounts_unfrozen((slot, pre_populate_zero_lamport.as_slice()), &ancestors);
 
         // Then store the actual accounts provided by the caller.
-        self.store_accounts_unfrozen(
-            accounts,
-            UpdateIndexThreadSelection::PoolWithThreshold,
-            &ancestors,
-        );
+        self.store_accounts_unfrozen(accounts, &ancestors);
     }
 
     #[allow(clippy::needless_range_loop)]

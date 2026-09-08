@@ -1908,7 +1908,7 @@ fn test_load_and_execute_commit_transactions_fees_only(define_ltds_fee_only_sema
         for key in &transaction.message.account_keys {
             if let Some(n) = bank
                 .get_account_shared_data(key)
-                .map(|(account, _)| account.data().len())
+                .map(|account| account.data().len())
             {
                 loaded_accounts_data_size += (n + TRANSACTION_ACCOUNT_BASE_SIZE) as u32
             }
@@ -4765,15 +4765,6 @@ fn test_check_ro_durable_nonce_fails() {
     assert_eq!(
         bank.process_transaction(&tx),
         Err(TransactionError::BlockhashNotFound)
-    );
-    assert_eq!(
-        bank.check_nonce_transaction_validity(
-            &new_sanitized_message(tx.message().clone()),
-            &bank.next_durable_nonce(),
-            false,
-            false,
-        ),
-        None
     );
 }
 
@@ -12925,12 +12916,10 @@ fn test_new_from_snapshot_uses_rent_from_sysvar() {
     bank.set_block_id(Some(Hash::default()));
 
     // Serialize bank to snapshot
-    let snapshot_storages = bank.get_snapshot_storages(None);
     let mut buf = vec![];
     crate::serde_snapshot::bank_to_stream(
         &mut std::io::BufWriter::new(Cursor::new(&mut buf)),
         &bank,
-        &snapshot_storages,
     )
     .unwrap();
 
@@ -12976,12 +12965,10 @@ fn test_new_from_snapshot_hashes_per_tick_changed() {
     bank.set_hashes_per_tick(Some(LEGACY_HASHES_PER_TICK));
     bank.set_block_id(Some(Hash::default()));
 
-    let snapshot_storages = bank.get_snapshot_storages(None);
     let mut buf = vec![];
     crate::serde_snapshot::bank_to_stream(
         &mut std::io::BufWriter::new(Cursor::new(&mut buf)),
         &bank,
-        &snapshot_storages,
     )
     .unwrap();
 
@@ -13154,7 +13141,7 @@ fn test_new_for_txn_tests_system_transfer() {
 
     let refs: Vec<_> = owned_accounts.iter().map(|(k, v)| (k, v)).collect();
     let ancestors = Ancestors::from(vec![parent_slot]);
-    accounts.store_accounts_seq((parent_slot, refs.as_slice()), 0, None, &ancestors);
+    accounts.store_accounts((parent_slot, refs.as_slice()), 0, None, &ancestors);
     accounts.accounts_db.add_root(parent_slot);
 
     let bank_rc = BankRc::new(accounts);
@@ -13333,7 +13320,7 @@ fn test_new_for_block_tests_with_vote_account() {
 
     let refs: Vec<_> = owned_accounts.iter().map(|(k, v)| (k, v)).collect();
     let ancestors = Ancestors::from(vec![parent_slot]);
-    accounts.store_accounts_seq((parent_slot, refs.as_slice()), 0, None, &ancestors);
+    accounts.store_accounts((parent_slot, refs.as_slice()), 0, None, &ancestors);
     accounts.accounts_db.add_root(parent_slot);
 
     let bank_rc = BankRc::new(accounts);
