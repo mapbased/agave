@@ -162,7 +162,7 @@ repository = "https://github.com/anza-xyz/agave"
 homepage = "https://anza.xyz/"
 license = "Apache-2.0"
 edition = "2024"
-rust-version = "1.98.0"
+rust-version = "1.98.1"
 
 [workspace.lints.rust.unexpected_cfgs]
 level = "warn"
@@ -438,7 +438,7 @@ solana-loader-v4-interface = "3.1.0"
 solana-local-cluster = { path = "local-cluster", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
 solana-measure = { path = "measure", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
 solana-merkle-tree = { path = "merkle-tree", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
-solana-message = "4.5.0"
+solana-message = "4.6.0"
 solana-metrics = { path = "metrics", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
 solana-msg = "3.1.0"
 solana-native-token = "3.0.0"
@@ -447,7 +447,7 @@ solana-nohash-hasher = "0.2.1"
 solana-nonce = "3.3.0"
 solana-nonce-account = { version = "4.3.0", default-features = false }
 solana-notifier = { path = "notifier", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
-solana-offchain-message = "3.0.0"
+solana-offchain-message = "3.0.1"
 solana-packet = "4.3.0"
 solana-perf = { path = "perf", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
 solana-poh = { path = "poh", version = "=4.4.0-alpha.3", features = ["agave-unstable-api"] }
