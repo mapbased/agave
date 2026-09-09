@@ -803,7 +803,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "art"
-version = "4.4.0-alpha.2"
+version = "4.4.0-alpha.3"
 dependencies = [
  "libc",
  "modular-bitfield",
@@ -5734,7 +5734,7 @@ dependencies = [
 
 [[package]]
 name = "solana-accounts-in-memory"
-version = "4.4.0-alpha.2"
+version = "4.4.0-alpha.3"
 dependencies = [
  "art",
  "blake3",
@@ -5745,7 +5745,7 @@ dependencies = [
  "modular-bitfield",
  "rayon",
  "smallvec",
- "solana-account 4.6.0",
+ "solana-account 4.7.0",
  "solana-clock",
  "solana-epoch-schedule",
  "solana-lattice-hash",

@@ -1596,7 +1596,7 @@ impl AccountsDb {
     // collection
     // Only remove those accounts where the entire rooted history of the account
     // can be purged because there are no live append vecs in the ancestors
-    pub fn clean_accounts_old(&self, max_clean_root_inclusive: Slot, is_startup: bool) {
+    pub fn clean_accounts(&self, max_clean_root_inclusive: Slot, is_startup: bool) {
         return;
     }
     pub fn clean_accounts_old(&self, max_clean_root_inclusive: Slot, is_startup: bool) {
