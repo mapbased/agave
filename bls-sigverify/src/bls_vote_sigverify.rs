@@ -32,8 +32,7 @@ use {
         pubkey::{PopVerified, PubkeyAffine as BlsPubkeyAffine, VerifySignature},
         signature::SignatureAffine,
     },
-    solana_clock::{Epoch, Slot},
-    solana_gossip::cluster_info::ClusterInfo,
+    solana_clock::Slot,
     solana_ledger::leader_schedule_cache::LeaderScheduleCache,
     solana_measure::{measure::Measure, measure_us},
     solana_pubkey::Pubkey,
@@ -92,18 +91,15 @@ impl UnverifiedVotePayload {
 
 fn verify_vote_batch(
     root_bank: &Bank,
-    cluster_info: &ClusterInfo,
+    my_pubkey: &Pubkey,
     leader_schedule: &LeaderScheduleCache,
     ban_sender: &BanSender,
     thread_pool: &ThreadPool,
-    rank_map_cache: &HashMap<Epoch, Arc<BLSPubkeyToRankMap>>,
+    rank_map: &BLSPubkeyToRankMap,
     vote_payload_to_sign: VotePayloadToSign,
     unverified_votes: Vec<UnverifiedVotePayload>,
 ) -> (u64, VoteVerificationStats, ProcessedVotes) {
     let unverified_votes_len = unverified_votes.len() as u64;
-    let vote_slot = vote_payload_to_sign.slot();
-    let vote_epoch = root_bank.epoch_schedule().get_epoch(vote_slot);
-    let rank_map = rank_map_cache.get(&vote_epoch).unwrap();
     let max_validators = rank_map.len();
     let (verified_votes, vote_verification_stats) = verify_votes(
         max_validators,
@@ -114,7 +110,7 @@ fn verify_vote_batch(
     );
 
     let processed_votes =
-        process_verified_votes(verified_votes, root_bank, cluster_info, leader_schedule);
+        process_verified_votes(verified_votes, root_bank, my_pubkey, leader_schedule);
     (
         unverified_votes_len,
         vote_verification_stats,
@@ -127,10 +123,12 @@ fn verify_vote_batch(
 ///
 /// Any vote that fails fallback individual signature verification will have its sender banlisted.
 pub(super) fn verify_and_send_votes(
-    unverified_votes: HashMap<VotePayloadToSign, Vec<UnverifiedVotePayload>>,
-    rank_map_cache: &HashMap<Epoch, Arc<BLSPubkeyToRankMap>>,
+    unverified_votes: HashMap<
+        VotePayloadToSign,
+        (Vec<UnverifiedVotePayload>, Arc<BLSPubkeyToRankMap>),
+    >,
     root_bank: &Bank,
-    cluster_info: &ClusterInfo,
+    my_pubkey: &Pubkey,
     leader_schedule: &LeaderScheduleCache,
     ban_sender: &BanSender,
     thread_pool: &ThreadPool,
@@ -151,15 +149,15 @@ pub(super) fn verify_and_send_votes(
             .fold(
                 || (0u64, VoteVerificationStats::default(), vec![]),
                 |(mut acc_total_votes, mut acc_verification_stats, mut acc_processed_votes),
-                 (vote_payload_to_sign, unverified_votes)| {
+                 (vote_payload_to_sign, (unverified_votes, rank_map))| {
                     let (unverified_votes_len, vote_verification_stats, processed_votes) =
                         verify_vote_batch(
                             root_bank,
-                            cluster_info,
+                            my_pubkey,
                             leader_schedule,
                             ban_sender,
                             thread_pool,
-                            rank_map_cache,
+                            &rank_map,
                             vote_payload_to_sign,
                             unverified_votes,
                         );
@@ -179,7 +177,6 @@ pub(super) fn verify_and_send_votes(
                 },
             )
     });
-    let my_pubkey = &cluster_info.id();
     let sender_stats = send_msgs(my_pubkey, channels, processed_votes)?;
     stats.votes_to_sig_verify += total_votes;
     stats.vote_verification_stats.merge(verification_stats);
@@ -217,7 +214,7 @@ fn inspect_for_repair(
 fn process_verified_votes(
     verified_votes: Vec<VerifiedVotePayload>,
     root_bank: &Bank,
-    cluster_info: &ClusterInfo,
+    my_pubkey: &Pubkey,
     leader_schedule: &LeaderScheduleCache,
 ) -> ProcessedVotes {
     let mut votes_for_reward = Vec::with_capacity(verified_votes.len());
@@ -227,14 +224,12 @@ fn process_verified_votes(
     for payload in verified_votes {
         inspect_for_repair(&payload, &mut msgs_for_repair);
 
-        for pubkey in &payload.sender_vote_account_pubkeys {
-            votes_for_metrics.push(ConsensusMetricsEvent::Vote {
-                id: *pubkey,
-                vote: *payload.vote_aggregate.vote(),
-            });
-        }
+        votes_for_metrics.push(ConsensusMetricsEvent::Vote {
+            ids: payload.sender_vote_account_pubkeys,
+            vote: *payload.vote_aggregate.vote(),
+        });
         if rewards_wants_vote(
-            cluster_info,
+            my_pubkey,
             leader_schedule,
             root_bank.slot(),
             payload.vote_aggregate.vote(),

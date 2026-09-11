@@ -124,7 +124,7 @@ pub fn spawn_service(
 
 struct ExtractedMsgs {
     certs: HashMap<CertificateType, Vec<CertPayload>>,
-    votes: HashMap<VotePayloadToSign, Vec<UnverifiedVotePayload>>,
+    votes: HashMap<VotePayloadToSign, (Vec<UnverifiedVotePayload>, Arc<BLSPubkeyToRankMap>)>,
 }
 
 struct SigVerifier {
@@ -207,8 +207,11 @@ impl SigVerifier {
                 continue;
             }
 
-            let (verify_res, verify_time_us) =
-                measure_us!(self.verify_and_send_inputs(&datagrams_buffer, certificates));
+            let (verify_res, verify_time_us) = measure_us!(self.verify_and_send_inputs(
+                &self.cluster_info.id(),
+                &datagrams_buffer,
+                certificates
+            ));
             self.stats
                 .verify_and_send_batch_us
                 .add_sample(verify_time_us);
@@ -228,19 +231,24 @@ impl SigVerifier {
         &mut self,
         datagrams: Vec<Datagram>,
     ) -> Result<(), SigVerifyError> {
-        self.verify_and_send_inputs(&datagrams, vec![])
+        self.verify_and_send_inputs(&self.cluster_info.id(), &datagrams, vec![])
     }
 
     fn verify_and_send_inputs(
         &mut self,
+        my_pubkey: &Pubkey,
         datagrams: &[Datagram],
         certificates: Vec<(Slot, UnverifiedCertificate)>,
     ) -> Result<(), SigVerifyError> {
         let root_bank = self.sharable_banks.root();
         self.maybe_prune_caches(&root_bank);
 
-        let (extracted_msgs, extract_msgs_us) =
-            measure_us!(self.extract_and_filter_msgs(datagrams, certificates, &root_bank));
+        let (extracted_msgs, extract_msgs_us) = measure_us!(self.extract_and_filter_msgs(
+            my_pubkey,
+            datagrams,
+            certificates,
+            &root_bank
+        ));
         self.stats
             .extract_filter_msgs_us
             .add_sample(extract_msgs_us);
@@ -249,9 +257,8 @@ impl SigVerifier {
             || {
                 verify_and_send_votes(
                     extracted_msgs.votes,
-                    &self.rank_map_cache,
                     &root_bank,
-                    &self.cluster_info,
+                    my_pubkey,
                     &self.leader_schedule,
                     &self.ban_sender,
                     &self.thread_pool,
@@ -260,7 +267,7 @@ impl SigVerifier {
             },
             || {
                 verify_and_send_certificates(
-                    &self.cluster_info.id(),
+                    my_pubkey,
                     &mut self.verified_certs,
                     extracted_msgs.certs,
                     &root_bank,
@@ -320,6 +327,7 @@ impl SigVerifier {
 
     fn extract_and_filter_msgs(
         &mut self,
+        my_pubkey: &Pubkey,
         datagrams: &[Datagram],
         certificates: Vec<(Slot, UnverifiedCertificate)>,
         root_bank: &Bank,
@@ -329,7 +337,7 @@ impl SigVerifier {
         let max_vote_slot = max_admitted_vote_slot(root_slot, highest_parent_ready_slot);
         let migration_slot = self.migration_status.migration_slot();
         let mut cert_groups = HashMap::<CertificateType, Vec<CertPayload>>::new();
-        let mut votes: HashMap<VotePayloadToSign, Vec<UnverifiedVotePayload>> = HashMap::new();
+        let mut votes = HashMap::new();
         let mut num_pkts = 0u64;
         let my_shred_version = self.cluster_info.my_shred_version();
         for Datagram {
@@ -351,21 +359,15 @@ impl SigVerifier {
 
             match decoded_msg {
                 DecodedWireConsensusMessage::Vote(unverified_vote) => {
-                    if let Some(payload) = self.keep_vote(
-                        unverified_vote,
+                    self.extract_and_filter_vote(
+                        my_pubkey,
                         *sender_identity_pubkey,
-                        root_bank,
-                        max_vote_slot,
                         migration_slot,
-                    ) {
-                        let vote_payload_to_sign = VotePayloadToSign::new_from_vote(
-                            payload.vote_message.vote,
-                            payload.vote_message.shred_version,
-                        );
-                        votes.entry(vote_payload_to_sign).or_default().push(payload);
-                    } else {
-                        self.stats.num_keep_vote_failed += 1;
-                    }
+                        max_vote_slot,
+                        root_bank,
+                        &mut votes,
+                        unverified_vote,
+                    );
                 }
                 DecodedWireConsensusMessage::Certificate(cert) => {
                     let cert_slot = cert.cert_type.slot();
@@ -421,22 +423,27 @@ impl SigVerifier {
         }
     }
 
-    /// If this vote should be verified, then returns the [`UnverifiedVotePayload`].
-    fn keep_vote(
+    fn extract_and_filter_vote(
         &mut self,
-        msg: UnverifiedVoteMessage,
+        my_pubkey: &Pubkey,
         sender_identity_pubkey: Pubkey,
-        root_bank: &Bank,
-        max_vote_slot: Slot,
         migration_slot: Option<Slot>,
-    ) -> Option<UnverifiedVotePayload> {
+        max_vote_slot: Slot,
+        root_bank: &Bank,
+        votes: &mut HashMap<
+            VotePayloadToSign,
+            (Vec<UnverifiedVotePayload>, Arc<BLSPubkeyToRankMap>),
+        >,
+        unverified_vote: UnverifiedVoteMessage,
+    ) {
         // votes from self take a different pathway.
-        if sender_identity_pubkey == self.cluster_info.id() {
-            return None;
+        if &sender_identity_pubkey == my_pubkey {
+            self.stats.num_keep_vote_failed += 1;
+            return;
         }
         let root_slot = root_bank.slot();
-        let vote_slot = msg.vote.slot();
-        let is_in_range = match msg.vote {
+        let vote_slot = unverified_vote.vote.slot();
+        let is_in_range = match unverified_vote.vote {
             // Genesis votes bypass the normal range check, instead we require that they are only accepted during the
             // migration epoch and less than the migration slot
             Vote::Genesis(_) => {
@@ -446,39 +453,77 @@ impl SigVerifier {
         };
         if !is_in_range {
             self.stats.vote_too_far_in_future += 1;
-            return None;
+            self.stats.num_keep_vote_failed += 1;
+            return;
         }
 
         match vote_slot.cmp(&root_slot) {
             // Genesis votes are allowed on the root slot
-            cmp::Ordering::Equal if msg.vote.is_genesis_vote() => (),
+            cmp::Ordering::Equal if unverified_vote.vote.is_genesis_vote() => (),
             // Votes are allowed at or below the root if they are useful for rewards
             cmp::Ordering::Less | cmp::Ordering::Equal => {
                 if !rewards_wants_vote(
-                    &self.cluster_info,
+                    my_pubkey,
                     &self.leader_schedule,
                     root_slot,
-                    &msg.vote,
+                    &unverified_vote.vote,
                 ) {
                     self.stats.num_old_votes_received += 1;
-                    return None;
+                    self.stats.num_keep_vote_failed += 1;
+                    return;
                 }
             }
             // Votes above the root are always allowed
             cmp::Ordering::Greater => (),
         }
 
-        let vote_epoch = root_bank.epoch_schedule().get_epoch(vote_slot);
-        let rank_map = match self.rank_map_cache.entry(vote_epoch) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let Some(rank_map) = root_bank.get_rank_map(vote_slot) else {
-                    self.stats.discard_vote_no_epoch_stakes += 1;
-                    return None;
+        let vote_payload_to_sign =
+            VotePayloadToSign::new_from_vote(unverified_vote.vote, unverified_vote.shred_version);
+        match votes.entry(vote_payload_to_sign) {
+            Entry::Vacant(e) => {
+                let vote_slot = unverified_vote.vote.slot();
+                let vote_epoch = root_bank.epoch_schedule().get_epoch(vote_slot);
+                let rank_map = match self.rank_map_cache.entry(vote_epoch) {
+                    Entry::Occupied(entry) => entry.get().clone(),
+                    Entry::Vacant(entry) => {
+                        let Some(rank_map) = root_bank.get_rank_map(vote_slot) else {
+                            self.stats.discard_vote_no_epoch_stakes += 1;
+                            self.stats.num_keep_vote_failed += 1;
+                            return;
+                        };
+                        entry.insert(rank_map.clone()).clone()
+                    }
                 };
-                entry.insert(rank_map.clone())
+                match self.keep_vote(&rank_map, unverified_vote, sender_identity_pubkey) {
+                    Some(payload) => {
+                        e.insert((vec![payload], rank_map));
+                    }
+                    None => {
+                        self.stats.num_keep_vote_failed += 1;
+                    }
+                }
             }
-        };
+            Entry::Occupied(mut e) => {
+                let (list, rank_map) = e.get_mut();
+                match self.keep_vote(rank_map, unverified_vote, sender_identity_pubkey) {
+                    Some(payload) => {
+                        list.push(payload);
+                    }
+                    None => {
+                        self.stats.num_keep_vote_failed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// If this vote should be verified, then returns the [`UnverifiedVotePayload`].
+    fn keep_vote(
+        &mut self,
+        rank_map: &BLSPubkeyToRankMap,
+        msg: UnverifiedVoteMessage,
+        sender_identity_pubkey: Pubkey,
+    ) -> Option<UnverifiedVotePayload> {
         let (rank, entry) = rank_map
             .get_ranked_entry_for_node(&sender_identity_pubkey)
             .or_else(|| {
@@ -612,7 +657,7 @@ mod tests {
         _metrics_receiver: ConsensusMetricsEventReceiver,
         generated_cert_types: Arc<GeneratedCertTypes>,
         _certificate_sender: Sender<(Slot, UnverifiedCertificate)>,
-        _bank_forks: Arc<RwLock<BankForks>>,
+        bank_forks: Arc<RwLock<BankForks>>,
     }
 
     impl TestContext {
@@ -703,7 +748,7 @@ mod tests {
                 _metrics_receiver: metrics_receiver,
                 generated_cert_types,
                 _certificate_sender: certificate_sender,
-                _bank_forks: bank_forks,
+                bank_forks,
             }
         }
 
@@ -786,13 +831,21 @@ mod tests {
         let slot = 2;
 
         ctx.verifier
-            .verify_and_send_inputs(&[], vec![(slot, certificate.clone())])
+            .verify_and_send_inputs(
+                &ctx.verifier.cluster_info.id(),
+                &[],
+                vec![(slot, certificate.clone())],
+            )
             .unwrap();
         expect_no_receive(&ctx.pool_receiver);
 
         ctx.verifier.migration_status.enable_alpenglow_for_tests();
         ctx.verifier
-            .verify_and_send_inputs(&[], vec![(slot, certificate)])
+            .verify_and_send_inputs(
+                &ctx.verifier.cluster_info.id(),
+                &[],
+                vec![(slot, certificate)],
+            )
             .unwrap();
         let SigVerifiedBatch::Certificates(certs) = ctx.pool_receiver.try_recv().unwrap() else {
             panic!("expected a certificate batch");
@@ -817,9 +870,12 @@ mod tests {
             Bank::new_from_parent(ctx.verifier.sharable_banks.root(), SlotLeader::default(), 5);
         ctx.verifier.migration_status.enable_alpenglow_for_tests();
 
-        let extracted_msgs =
-            ctx.verifier
-                .extract_and_filter_msgs(&[], vec![(slot, certificate)], &root_bank);
+        let extracted_msgs = ctx.verifier.extract_and_filter_msgs(
+            &ctx.verifier.cluster_info.id(),
+            &[],
+            vec![(slot, certificate)],
+            &root_bank,
+        );
         assert!(extracted_msgs.certs.is_empty());
         assert!(extracted_msgs.votes.is_empty());
         assert_eq!(ctx.verifier.stats.num_old_certs_received.0, 1);
@@ -964,6 +1020,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(ctx.verifier.stats.vote_too_far_in_future.0, 1);
+        assert_eq!(ctx.verifier.stats.num_keep_vote_failed.0, 1);
+        assert_eq!(ctx.verifier.stats.discard_vote_no_epoch_stakes.0, 0);
 
         // Expect no messages since the packet was malformed
         expect_no_receive(&ctx.pool_receiver);
@@ -1631,66 +1689,20 @@ mod tests {
 
     #[test]
     fn test_verify_old_vote_and_cert() {
-        let (channel_to_pool, pool_receiver) = bounded(1024);
-        let (channel_to_repair, _repair_receiver) = EvictingSender::new_bounded(1024);
-        let (channel_to_metrics, _metrics_receiver) = bounded(1024);
-        let (channel_to_reward, _reward_receiver) = bounded(1024);
-        let validator_keypairs = (0..10)
-            .map(|_| ValidatorVoteKeypairs::new_rand())
-            .collect::<Vec<_>>();
-        let stakes_vec = (0..validator_keypairs.len())
-            .map(|i| 1_000 - i as u64)
-            .collect::<Vec<_>>();
-        let genesis = create_genesis_config_with_alpenglow_vote_accounts(
-            1_000_000_000,
-            &validator_keypairs,
-            stakes_vec,
-        );
-        let bank0 = Bank::new_for_tests(&genesis.genesis_config);
-        let (bank0, _temp_bank_forks) = bank0.wrap_with_bank_forks_for_tests();
-        let bank5 = Bank::new_from_parent(bank0, SlotLeader::default(), 5);
-        let bank_forks = BankForks::new_rw_arc(bank5);
-
-        bank_forks.write().unwrap().set_root(5, None, None);
-
-        let sharable_banks = bank_forks.read().unwrap().sharable_banks();
-        let keypair = Keypair::new();
-        let contact_info = ContactInfo::new_localhost(&keypair.pubkey(), 0);
-        let cluster_info = Arc::new(ClusterInfo::new(
-            contact_info,
-            Arc::new(keypair),
-            SocketAddrSpace::Unspecified,
-        ));
-        let leader_schedule = Arc::new(LeaderScheduleCache::new_from_bank(&sharable_banks.root()));
-        let (_packet_sender, packet_receiver) = bounded(1024);
-        let (_certificate_sender, certificate_receiver) = bounded(1024);
-        let (ban_sender, _ban_receiver) = stub_ban_channel_for_tests(1024);
-        let mut sig_verifier = SigVerifier::new(
-            SigVerifierContext {
-                migration_status: Arc::new(MigrationStatus::default()),
-                ban_sender,
-                sharable_banks,
-                highest_parent_ready: Arc::new(RwLock::default()),
-                cluster_info,
-                leader_schedule,
-                num_threads: 4,
-                generated_cert_types: Arc::new(GeneratedCertTypes::default()),
-            },
-            SigVerifierChannels::new(
-                packet_receiver,
-                certificate_receiver,
-                channel_to_repair,
-                channel_to_reward,
-                channel_to_pool,
-                channel_to_metrics,
-            ),
-        );
+        let mut ctx = TestContext::new();
+        let bank5 =
+            Bank::new_from_parent(ctx.verifier.sharable_banks.root(), SlotLeader::default(), 5);
+        {
+            let mut bank_forks = ctx.bank_forks.write().unwrap();
+            bank_forks.insert(bank5);
+            bank_forks.set_root(5, None, None);
+        }
 
         let rank = 0;
         let vote = Vote::new_skip_vote(2);
         let vote_payload =
-            get_vote_payload_to_sign(vote, sig_verifier.cluster_info.my_shred_version());
-        let bls_keypair = &validator_keypairs[rank].bls_keypair;
+            get_vote_payload_to_sign(vote, ctx.verifier.cluster_info.my_shred_version());
+        let bls_keypair = &ctx.validator_keypairs[rank].bls_keypair;
         let signature = SignatureAffine::from(bls_keypair.sign(&vote_payload));
         let consensus_message_vote = ConsensusMessage::Vote(VoteMessage {
             vote,
@@ -1701,38 +1713,35 @@ mod tests {
         let datagrams_vote = messages_to_datagrams(
             &[(
                 consensus_message_vote,
-                validator_keypairs[rank].node_keypair.pubkey(),
+                ctx.validator_keypairs[rank].node_keypair.pubkey(),
             )],
-            sig_verifier.cluster_info.my_shred_version(),
+            ctx.verifier.cluster_info.my_shred_version(),
         );
 
-        sig_verifier
+        ctx.verifier
             .verify_and_send_datagrams(datagrams_vote)
             .unwrap();
-        expect_no_receive(&pool_receiver);
-        assert_eq!(sig_verifier.stats.num_old_votes_received.0, 1);
+        expect_no_receive(&ctx.pool_receiver);
+        assert_eq!(ctx.verifier.stats.num_old_votes_received.0, 1);
 
         let cert = test_create_base2_certificate(
-            &validator_keypairs
-                .iter()
-                .map(|k| k.bls_keypair.clone())
-                .collect::<Vec<_>>(),
-            sig_verifier.cluster_info.my_shred_version(),
+            &ctx.bls_keypairs(),
+            ctx.verifier.cluster_info.my_shred_version(),
             CertificateType::Finalize(3),
             &[0], // Signer rank 0
         );
         let consensus_message_cert = ConsensusMessage::Certificate(cert);
         let datagrams_cert = messages_to_datagrams(
             &[(consensus_message_cert, Pubkey::new_unique())],
-            sig_verifier.cluster_info.my_shred_version(),
+            ctx.verifier.cluster_info.my_shred_version(),
         );
 
-        sig_verifier
+        ctx.verifier
             .verify_and_send_datagrams(datagrams_cert)
             .unwrap();
-        expect_no_receive(&pool_receiver);
-        assert_eq!(sig_verifier.stats.num_old_certs_received.0, 1);
-        assert_eq!(sig_verifier.stats.num_old_votes_received.0, 1);
+        expect_no_receive(&ctx.pool_receiver);
+        assert_eq!(ctx.verifier.stats.num_old_certs_received.0, 1);
+        assert_eq!(ctx.verifier.stats.num_old_votes_received.0, 1);
     }
 
     #[test]
@@ -2113,6 +2122,8 @@ mod tests {
         ctx.verifier.verify_and_send_datagrams(datagrams).unwrap();
 
         assert_eq!(ctx.verifier.stats.vote_too_far_in_future.0, 1);
+        assert_eq!(ctx.verifier.stats.num_keep_vote_failed.0, 1);
+        assert_eq!(ctx.verifier.stats.discard_vote_no_epoch_stakes.0, 0);
         assert_eq!(ctx.verifier.stats.vote_stats.senders.pool_sender.sent.0, 1);
         assert_eq!(ctx.verifier.stats.cert_too_far_in_future.0, 0);
         assert_eq!(ctx.verifier.stats.cert_stats.pool_sender.sent.0, 1);

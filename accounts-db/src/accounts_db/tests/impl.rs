@@ -1476,11 +1476,8 @@ fn test_shrink_collect_carries_forward_existing_tombstones() {
     // not mis-routed into the alive set.
     let mut unique_accounts =
         accounts_db.get_unique_accounts_from_storage_for_shrink(&storage, &ShrinkStats::default());
-    let shrink_collect = accounts_db.shrink_collect::<AliveAccounts<'_>>(
-        &storage,
-        &mut unique_accounts,
-        &ShrinkStats::default(),
-    );
+    let shrink_collect =
+        accounts_db.shrink_collect(&storage, &mut unique_accounts, &ShrinkStats::default());
     assert_eq!(shrink_collect.tombstones_to_carry_forward.len(), 1);
     assert!(shrink_collect.tombstones_total_bytes > 0);
     assert_eq!(
@@ -1498,11 +1495,8 @@ fn test_shrink_collect_carries_forward_existing_tombstones() {
     accounts_db.set_latest_full_snapshot_slot(slot);
     let mut unique_accounts =
         accounts_db.get_unique_accounts_from_storage_for_shrink(&storage, &ShrinkStats::default());
-    let shrink_collect = accounts_db.shrink_collect::<AliveAccounts<'_>>(
-        &storage,
-        &mut unique_accounts,
-        &ShrinkStats::default(),
-    );
+    let shrink_collect =
+        accounts_db.shrink_collect(&storage, &mut unique_accounts, &ShrinkStats::default());
     assert!(shrink_collect.tombstones_to_carry_forward.is_empty());
     assert_eq!(shrink_collect.tombstones_total_bytes, 0);
 }
@@ -6053,7 +6047,7 @@ fn test_shrink_collect_simple() {
                                     &ShrinkStats::default(),
                                 );
 
-                            let shrink_collect = db.shrink_collect::<AliveAccounts<'_>>(
+                            let shrink_collect = db.shrink_collect(
                                 &storage,
                                 &mut unique_accounts,
                                 &ShrinkStats::default(),
@@ -6214,11 +6208,7 @@ fn test_shrink_collect_with_obsolete_accounts() {
     let mut unique_accounts =
         db.get_unique_accounts_from_storage_for_shrink(&storage, &ShrinkStats::default());
 
-    let shrink_collect = db.shrink_collect::<AliveAccounts<'_>>(
-        &storage,
-        &mut unique_accounts,
-        &ShrinkStats::default(),
-    );
+    let shrink_collect = db.shrink_collect(&storage, &mut unique_accounts, &ShrinkStats::default());
 
     assert_eq!(shrink_collect.slot, slot);
 
@@ -6244,7 +6234,7 @@ fn test_shrink_collect_with_obsolete_accounts() {
 fn test_combine_ancient_slots_empty() {
     let db = AccountsDb::new_for_tests_with_config(Vec::new(), DEFAULT_ACCOUNTS_DB_CONFIG);
     // empty slots
-    db.combine_ancient_slots_packed(Vec::default(), false);
+    db.combine_ancient_slots_packed(Vec::default());
 }
 
 #[test]
@@ -6261,7 +6251,7 @@ fn test_combine_ancient_slots_simple() {
     let unique_accounts_pre = accounts_db.get_unique_accounts_from_storage(&storage_pre);
     assert_eq!(unique_accounts_pre.stored_accounts.len(), 1);
 
-    accounts_db.combine_ancient_slots_packed(vec![slot], false);
+    accounts_db.combine_ancient_slots_packed(vec![slot]);
 
     let storage_post = accounts_db.get_storage_for_slot(slot).unwrap();
     let unique_accounts_post = accounts_db.get_unique_accounts_from_storage(&storage_post);
