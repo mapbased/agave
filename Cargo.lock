@@ -6784,6 +6784,7 @@ dependencies = [
  "art",
  "bincode",
  "crossbeam-channel",
+ "hex",
  "log",
  "mev-api",
  "serde",
