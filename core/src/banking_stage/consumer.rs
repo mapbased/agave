@@ -367,6 +367,7 @@ impl Consumer {
                     all_or_nothing: flags.all_or_nothing,
                     strict_nonce_size_check: true,
                     drop_noop_transactions: true,
+                    drop_bail_out_transactions: true,
                 }
             ));
         execute_and_commit_timings.load_execute_us = load_execute_us;
@@ -566,7 +567,7 @@ mod tests {
         solana_cost_model::cost_model::CostModel,
         solana_fee_calculator::FeeCalculator,
         solana_hash::Hash,
-        solana_instruction::error::InstructionError,
+        solana_instruction_error::InstructionError,
         solana_keypair::Keypair,
         solana_leader_schedule::SlotLeader,
         solana_ledger::genesis_utils::{

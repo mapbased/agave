@@ -156,9 +156,10 @@ pub struct EpochBoundaryPreparation {
     pub upcoming_epoch: Epoch,
     /// Anticipated replacement for `environments` at the next epoch
     ///
-    /// This is `None` during most of an epoch, and only `Some` around the boundaries (at the end and beginning of an epoch).
-    /// More precisely, it starts with the cache preparation phase a few hundred slots before the epoch boundary,
-    /// and it ends with the first rerooting after the epoch boundary.
+    /// This is only `Some` around the boundaries when a changed environment is
+    /// actually coming. It starts with the cache preparation phase a few
+    /// hundred slots before the epoch boundary, and it ends with the first
+    /// rerooting after the epoch boundary.
     pub upcoming_environment: Option<ProgramRuntimeEnvironment>,
     /// List of loaded programs which should be recompiled before the next epoch (but don't have to).
     pub programs_to_recompile: Vec<(Pubkey, Arc<ProgramCacheEntry>)>,
@@ -949,22 +950,6 @@ impl<FG: ForkGraph> ProgramCache<FG> {
                 }
             }
         }
-    }
-}
-
-#[cfg(feature = "frozen-abi")]
-impl solana_frozen_abi::abi_example::AbiExample for ProgramCacheEntry {
-    fn example() -> Self {
-        // ProgramCacheEntry isn't serializable by definition.
-        Self::default()
-    }
-}
-
-#[cfg(feature = "frozen-abi")]
-impl<FG: ForkGraph> solana_frozen_abi::abi_example::AbiExample for ProgramCache<FG> {
-    fn example() -> Self {
-        // ProgramCache isn't serializable by definition.
-        Self::new(Slot::default())
     }
 }
 

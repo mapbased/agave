@@ -9,6 +9,9 @@ jobs:
     if: github.repository == 'anza-xyz/agave'
     name: benchmark
     runs-on: benchmark
+    # Fail fast on a stalled bench instead of waiting out the 360 minute
+    # default. All jobs run in the order of minutes, well below this cap.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -31,33 +34,28 @@ jobs:
         test:
           - {
               name: "solana-runtime",
-              commands: ["cargo +$rust_nightly bench -p solana-runtime"],
+              commands:
+                [
+                  "cargo bench -p solana-runtime -- --output-format bencher --noplot",
+                ],
             }
           - {
               name: "solana-gossip",
               commands: ["cargo bench -p solana-gossip -- --output-format bencher --noplot"],
             }
-          # split because transaction_recorder is a criterion bench, while poh and
-          # poh_verify use the bencher harness, which would treat `--output-format`
-          # as a benchmark name filter and run nothing
           - {
               name: "solana-poh",
-              commands:
-                [
-                  "cargo bench -p solana-poh --bench poh",
-                  "cargo bench -p solana-poh --bench poh_verify",
-                  "cargo bench -p solana-poh --bench transaction_recorder -- --output-format bencher --noplot",
-                ],
+              commands: ["cargo bench -p solana-poh"],
             }
-          # split because consensus is a criterion bench, while shredder and
-          # sigverify_stage use the bencher harness, which would treat
-          # `--output-format` as a benchmark name filter and run nothing
+          # split because sigverify_stage still uses the bencher harness, which
+          # would treat `--output-format` as a benchmark name filter and run
+          # nothing
           - {
               name: "solana-core",
               commands:
                 [
                   "cargo bench -p solana-core --bench consensus -- --output-format bencher --noplot",
-                  "cargo bench -p solana-core --bench shredder",
+                  "cargo bench -p solana-core --bench shredder -- --output-format bencher --noplot",
                   "cargo bench -p solana-core --bench sigverify_stage",
                 ],
             }
@@ -83,7 +81,6 @@ jobs:
           # pipefail: without it the pipeline's status is tee's, so a bench
           # command that fails to even resolve a target passes silently
           set -o pipefail
-          source ci/rust-version.sh nightly
           echo '${{ toJson(matrix.test.commands) }}' | jq -r '.[]' | while read command; do
             eval $command | tee -a benchmark
           done
