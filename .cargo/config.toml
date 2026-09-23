@@ -1,6 +1,6 @@
 [target.x86_64-unknown-linux-gnu]
-# When building for linux, target the minimal supported CPU
-rustflags = ["-Ctarget-cpu=x86-64-v2"]
+# Target the host machine's native CPU for maximum performance (AVX2, FMA, BMI2, etc.)
+rustflags = ["-Ctarget-cpu=native"]
 
 [target.aarch64-apple-darwin]
 rustflags = ["-Clinker-plugin-lto=no"]

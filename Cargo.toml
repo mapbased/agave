@@ -618,8 +618,11 @@ strip = false
 split-debuginfo = "off"
 
 [profile.release]
-split-debuginfo = "unpacked"
-lto = "thin"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+split-debuginfo = "off"
 
 [profile.release-with-lto]
 inherits = "release"
