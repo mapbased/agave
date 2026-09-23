@@ -69,7 +69,7 @@ pub(crate) fn should_retain_crds_value(
 ) -> bool {
     if is_gossip_minimal_mode() {
         return match value.data() {
-            CrdsData::ContactInfo(node) => node.has_consistent_udp_ip(),
+            CrdsData::ContactInfo(_) => true,
             _ => false,
         };
     }
