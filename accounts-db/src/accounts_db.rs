@@ -4584,16 +4584,15 @@ impl AccountsDb {
 
         // ── Acquire the ring-buffer slot (with deferred write-out if needed) ──
 
-        let mut current_slot = cache.slot.load(Ordering::Acquire);
-        let mut spin_count = 0u32;
+        let mut current_slot=cache.slot.load(Ordering::Acquire);
         while current_slot != target_slot {
 
-            match cache.state.compare_exchange(SLOT_FREE, SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => {
+            match cache.state.compare_exchange( SLOT_FREE, SLOT_ACTIVE, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) =>{
                     cache.slot.store(target_slot, Ordering::Release);
                     break;
                 }
-                Err(state) => {
+                Err(state)=>{
                     if state == solana_accounts_in_memory::slot_cache::SLOT_ROOTED {
                         // Background thread is supposed to flush this, but we hit the watermark wall!
                         // Back-pressure: we claim it and flush it ourselves.
@@ -4601,47 +4600,23 @@ impl AccountsDb {
                             solana_accounts_in_memory::slot_cache::SLOT_ROOTED,
                             solana_accounts_in_memory::slot_cache::SLOT_CLAIMING,
                             Ordering::AcqRel,
-                            Ordering::Acquire,
+                            Ordering::Acquire
                         ).is_ok() {
-                            let actual_slot = cache.slot.load(Ordering::Acquire);
-                            if actual_slot != 0 {
-                                self.locator.flush_slot(actual_slot, cache);
-                            }
+                            self.locator.flush_slot(current_slot, cache);
                             cache.clear_for_reuse(&self.locator);
                             cache.slot.store(target_slot, Ordering::Release);
-                            cache.state.store(SLOT_ACTIVE, Ordering::Release);
+                            cache.state.store( SLOT_ACTIVE, Ordering::Release);
 
                             break;
                         }
                     } else if state == solana_accounts_in_memory::slot_cache::SLOT_CLAIMING {
                         // Background thread is currently flushing this slot.
-                        // Yield CPU to let background flusher make progress without CPU starvation.
-                        spin_count += 1;
-                        if spin_count > 32 {
-                            std::thread::yield_now();
-                        } else {
-                            std::hint::spin_loop();
-                        }
-                    } else if state == SLOT_ACTIVE || state == solana_accounts_in_memory::slot_cache::SLOT_FROZEN {
-                        // Check if the occupying slot is an abandoned/dead fork from the past
-                        if current_slot < target_slot && current_slot != 0 {
-                            spin_count += 1;
-                            if spin_count > 64 {
-                                // Old slot was abandoned and never freed by consensus.
-                                // Purge the dead fork slot so we can reclaim this cache index.
-                                self.purge_slot_from_cache(current_slot);
-                                std::thread::yield_now();
-                            } else {
-                                std::hint::spin_loop();
-                            }
-                        } else {
-                            spin_count += 1;
-                            if spin_count > 32 {
-                                std::thread::yield_now();
-                            } else {
-                                std::hint::spin_loop();
-                            }
-                        }
+                        // Spin and wait until it becomes FREE.
+                        std::hint::spin_loop();
+                    } else if state ==  SLOT_ACTIVE || state == solana_accounts_in_memory::slot_cache::SLOT_FROZEN {
+                        // We caught up to a slot that is currently active or frozen (being used by foreground).
+                        // This means the entire ring buffer is full of active transactions!
+                        std::hint::spin_loop();
                     } else {
                         panic!("unexpected slot state: {}", state);
                     }
@@ -4649,6 +4624,7 @@ impl AccountsDb {
             }
 
             // Spin wait until slot matches or becomes available
+            std::hint::spin_loop();
             current_slot = cache.slot.load(Ordering::Acquire);
         }
 
@@ -5133,58 +5109,53 @@ impl AccountsDb {
     /// add_root Phase 1: Forward-scan from `slot` to clean up fork (non-rooted) slots.
     /// Stops when encountering a FREE slot or a ROOTED slot.
     fn cleanup_fork_slots(&self, slot: Slot) {
-        use solana_accounts_in_memory::slot_cache::SLOT_ROOTED;
+        use solana_accounts_in_memory::slot_cache::{SLOT_FREE, SLOT_ROOTED};
+
 
         for offset in 1..(solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64) {
             let prev_slot_candidate = slot.saturating_sub(offset);
 
             let prev_idx = (prev_slot_candidate % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
-            let prev_cache: &solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[prev_idx];
+            let prev_cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[prev_idx];
             let prev_stored = prev_cache.slot.load(Ordering::Acquire);
 
-            if prev_stored != prev_slot_candidate {
-                continue;
-            } // Not this candidate slot (skipped, empty, or recycled), keep searching
-
-            let prev_state = prev_cache.state.load(Ordering::Acquire);
-            if prev_state >= SLOT_ROOTED {
-                break; // Reached an already rooted ancestor, earlier dead forks already cleaned
+            if prev_stored > prev_slot_candidate {
+                break;
+            } // Newer slot occupies this position, keep going!
+            let prev_state=prev_cache.state.load(Ordering::Acquire);
+            if prev_state>=SLOT_ROOTED{
+                break;
             }
-
             // Collect all modified accounts in this dead fork
             let mut discarded_accounts = Vec::new();
             prev_cache.for_each_bag(|bag| {
                 if bag.is_modified.load(Ordering::Acquire) {
                     discarded_accounts.push(bag.bitset.account_index);
+
                 }
+                bag.bitset.clear_bit(prev_slot_candidate, Ordering::AcqRel);
             });
 
             // Notify plugins instantly
-            if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get()
-                && !discarded_accounts.is_empty()
-            {
+            if let Some(notifier) = solana_accounts_in_memory::mev_notifier::get()  &&! discarded_accounts.is_empty(){
                 notifier.on_slot_discarded(prev_slot_candidate, &discarded_accounts);
             }
-
-            // Explicitly purge the dead fork slot from the ring cache and reset to SLOT_FREE
-            self.purge_slot_from_cache(prev_slot_candidate);
         }
     }
     pub fn add_root(&self, slot: Slot) -> AccountsAddRootTiming {
         use solana_accounts_in_memory::slot_cache::SLOT_ROOTED;
 
         let cache = &self.locator.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
-        let cur_slot = cache.slot.load(Ordering::Acquire);
-        if cur_slot == slot {
-            cache.state.store(SLOT_ROOTED, Ordering::Release);
-            debug!("slot rooted :{}", slot);
-
-            self.cleanup_fork_slots(slot);
-            // Backward Coalescing — absorb predecessor write obligations.
-            self.backward_coalesce(slot, cache);
-        } else if cur_slot != 0 {
-            warn!("slot to root not found in ring cache expect {} found {}", slot, cur_slot);
+        let cur_slot=cache.slot.load(Ordering::Acquire) ;
+        if cur_slot!= slot  &&cur_slot!=0{
+            panic!("slot to root not found in ring cache expect {} found {}",slot ,cur_slot);
         }
+        cache.state.store(SLOT_ROOTED, Ordering::Release);
+        debug!("slot rooted :{}",slot);
+
+        self.cleanup_fork_slots(slot);
+        // Backward Coalescing — absorb predecessor write obligations.
+        self.backward_coalesce(slot, cache);
 
         AccountsAddRootTiming {
             cache_us: 0,
@@ -5192,10 +5163,43 @@ impl AccountsDb {
     }
 
 
+    /// Write out all `is_modified == true` accounts from a SlotCache to the ART-tree,
+    /// then clear the locator bits for that slot.
+    /// Called during ring-buffer slot reuse (store_accounts_unfrozen) for ROOTED slots.
+    /// Clear locator bits for all accounts in a slot's cache (without writing to ART-tree).
+    /// Used for non-rooted slots (fork data or implicit purge).
+    fn clear_locator_bits(
+        &self,
+        slot: Slot,
+        cache: &solana_accounts_in_memory::slot_cache::SlotCache,
+    ) {
+        cache.for_each_bag(|bag| {
+            bag.bitset.clear_bit(slot, Ordering::AcqRel);
+        });
+    }
+
     /// Purge a single slot from the ring-buffer cache.
     /// Uses CAS to claim exclusive cleanup rights. Safe to call concurrently.
     fn purge_slot_from_cache(&self, slot: Slot) {
-        self.locator.purge_slot(slot);
+        use solana_accounts_in_memory::slot_cache::SLOT_FREE;
+
+        let idx = (slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize;
+        let cache = &self.locator.slot_caches[idx];
+
+        // CAS: slot → u64::MAX to claim exclusive cleanup
+        if cache
+            .slot
+            .compare_exchange(slot, u64::MAX, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return; // Another thread already cleaned, or slot was overwritten
+        }
+
+        // Clear locator bits (don't write to ART-tree — fork data is discarded)
+        self.clear_locator_bits(slot, cache);
+        cache.clear_for_reuse(&self.locator);
+        cache.state.store(SLOT_FREE, Ordering::Release);
+        cache.slot.store(0, Ordering::Release);
     }
 
     /// add_root Phase 2: Backward Coalescing.
