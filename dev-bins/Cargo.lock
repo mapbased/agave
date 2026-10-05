@@ -9085,6 +9085,7 @@ dependencies = [
  "dashmap",
  "derive-where",
  "derive_more 2.1.1",
+ "libc",
  "log",
  "scopeguard",
  "solana-clock 4.0.0",
