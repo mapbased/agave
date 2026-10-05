@@ -26,6 +26,7 @@ crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }
+libc = { workspace = true }
 log = { workspace = true }
 scopeguard = { workspace = true }
 solana-clock = { workspace = true }

@@ -1269,6 +1269,7 @@ impl<S: SpawnableScheduler<TH>, TH: TaskHandler> ThreadManager<S, TH> {
             // like syscalls, VDSO, and even memory (de)allocation should be avoided at all costs
             // by design or by means of offloading at the last resort.
             move || {
+                tune_worker_thread_priority();
                 let (do_now, dont_now) = (&disconnected::<()>(), &never::<()>());
                 let dummy_receiver = |trigger| {
                     if trigger { do_now } else { dont_now }
@@ -1496,6 +1497,7 @@ impl<S: SpawnableScheduler<TH>, TH: TaskHandler> ThreadManager<S, TH> {
             //    `select_biased!`, which are sent from `.send_chained_channel()` in the scheduler
             //    thread for all-but-initial sessions.
             move || {
+                tune_worker_thread_priority();
                 loop {
                     let (task, sender) = select_biased! {
                         recv(runnable_task_receiver.for_select()) -> message => {
@@ -1869,6 +1871,90 @@ where
         self.thread_manager.pool.clone().return_scheduler(*self);
     }
 }
+
+#[cfg(unix)]
+fn tune_worker_thread_priority() {
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+    static INFO_ONCE: std::sync::Once = std::sync::Once::new();
+
+    let thread_name = thread::current().name().unwrap_or("solScWorker").to_string();
+
+    // 1. Optional Realtime scheduling (SCHED_FIFO or SCHED_RR) via env var
+    let rt_policy_env = std::env::var("SOLANA_SVM_WORKER_POLICY")
+        .ok()
+        .or_else(|| {
+            std::env::var("SOLANA_SVM_WORKER_RT").ok().and_then(|v| {
+                if v == "1" || v.eq_ignore_ascii_case("true") {
+                    Some("FIFO".to_string())
+                } else {
+                    None
+                }
+            })
+        });
+
+    if let Some(policy_str) = rt_policy_env {
+        let (policy, default_prio) = match policy_str.to_uppercase().as_str() {
+            "FIFO" => (libc::SCHED_FIFO, 80),
+            "RR" => (libc::SCHED_RR, 80),
+            _ => (libc::SCHED_FIFO, 80),
+        };
+        let prio: i32 = std::env::var("SOLANA_SVM_WORKER_RT_PRIO")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(default_prio);
+
+        unsafe {
+            let mut param: libc::sched_param = mem::zeroed();
+            param.sched_priority = prio;
+            let ret = libc::pthread_setschedparam(libc::pthread_self(), policy, &param);
+            if ret == 0 {
+                debug!("{thread_name}: Enabled realtime scheduling policy {policy_str} (priority {prio})");
+                INFO_ONCE.call_once(|| {
+                    info!(
+                        "UnifiedScheduler: Worker threads configured with realtime scheduling policy {} (priority {})",
+                        policy_str, prio
+                    );
+                });
+                return;
+            } else {
+                let err = std::io::Error::from_raw_os_error(ret);
+                WARN_ONCE.call_once(|| {
+                    warn!(
+                        "UnifiedScheduler: Failed to set realtime scheduling {policy_str} (priority {prio}): {err}. Falling back to nice priority."
+                    );
+                });
+            }
+        }
+    }
+
+    // 2. Default CFS priority: boost to nice -20 (or configured via SOLANA_SVM_WORKER_NICE)
+    let target_nice: i32 = std::env::var("SOLANA_SVM_WORKER_NICE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(-20);
+
+    unsafe {
+        let ret = libc::setpriority(libc::PRIO_PROCESS, 0, target_nice);
+        if ret == 0 {
+            debug!("{thread_name}: Successfully set thread priority to nice {target_nice}");
+            INFO_ONCE.call_once(|| {
+                info!(
+                    "UnifiedScheduler: Elevated transaction execution worker threads to nice {target_nice}"
+                );
+            });
+        } else {
+            let err = std::io::Error::last_os_error();
+            WARN_ONCE.call_once(|| {
+                warn!(
+                    "UnifiedScheduler: Could not set thread priority to nice {target_nice}: {err}. Run with CAP_SYS_NICE or configure /etc/security/limits.conf (e.g. '* - nice -20') to allow highest scheduling priority."
+                );
+            });
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn tune_worker_thread_priority() {}
 
 #[cfg(test)]
 mod tests {
