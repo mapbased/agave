@@ -23,7 +23,7 @@ use {
     solana_rent::Rent,
     solana_sdk_ids::{
         bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, loader_v4, native_loader,
-        sysvar::{self, slot_history},
+        sysvar,
     },
     solana_svm_callback::{AccountState, TransactionProcessingCallback},
     solana_svm_feature_set::SVMFeatureSet,
@@ -201,12 +201,11 @@ impl<'a, CB: TransactionProcessingCallback> AccountLoader<'a, CB> {
     ) -> AccountLoader<'a, CB> {
         let mut loaded_accounts = AHashMap::with_capacity(capacity);
 
-        // SlotHistory may be overridden for simulation.
-        // No other uses of AccountOverrides are expected.
-        if let Some(slot_history) =
-            account_overrides.and_then(|overrides| overrides.get(&slot_history::id()))
-        {
-            loaded_accounts.insert(slot_history::id(), slot_history.clone());
+        // Populate loaded accounts with any overrides provided for simulation.
+        if let Some(overrides) = account_overrides {
+            for (pubkey, account) in overrides.iter() {
+                loaded_accounts.insert(*pubkey, account.clone());
+            }
         }
 
         Self {

@@ -248,6 +248,7 @@ mod metrics;
 pub(crate) mod partitioned_epoch_rewards;
 mod recent_blockhashes_account;
 mod serde_snapshot;
+mod simulation_overrides;
 mod sysvar_cache;
 pub(crate) mod tests;
 
