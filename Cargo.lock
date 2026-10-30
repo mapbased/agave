@@ -6875,6 +6875,7 @@ dependencies = [
  "solana-sdk 4.1.0",
  "solana-sdk-ids 3.1.0",
  "spl-token-2022-interface",
+ "wincode",
 ]
 
 [[package]]
@@ -6907,6 +6908,7 @@ dependencies = [
  "solana-sdk 4.1.0",
  "solana-system-interface 3.3.0",
  "spl-token-2022-interface",
+ "wincode",
 ]
 
 [[package]]
