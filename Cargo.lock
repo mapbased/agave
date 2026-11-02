@@ -6938,10 +6938,13 @@ name = "mev-stat"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "flate2",
  "flexi_logger 0.27.4",
  "log",
  "mev-api",
  "parking_lot 0.12.5",
+ "rayon",
+ "regex",
  "serde",
  "serde_json",
  "solana-account 5.0.0",
