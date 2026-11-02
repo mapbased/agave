@@ -2384,7 +2384,7 @@ impl Bank {
     }
 
     /// Return subset of bank fields representing serializable state
-    pub(crate) fn get_fields_to_serialize(&self) -> BankFieldsToSerialize {
+    pub fn get_fields_to_serialize(&self) -> BankFieldsToSerialize {
         BankFieldsToSerialize {
             blockhash_queue: self.blockhash_queue.read().unwrap().clone(),
             hash: *self.hash.read().unwrap(),
