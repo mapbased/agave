@@ -1,6 +1,8 @@
 //! Definitions for the base of all Gossip protocol messages
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::{field_qualifiers, qualifiers};
+#[cfg(feature = "stable-abi")]
+use solana_frozen_abi_macro::{StableAbi, StableAbiSample, frozen_abi};
 use {
     crate::{
         crds_data::{CrdsData, MAX_WALLCLOCK},
@@ -47,21 +49,21 @@ const GOSSIP_PING_TOKEN_SIZE: usize = 32;
 pub(crate) const PULL_RESPONSE_MIN_SERIALIZED_SIZE: usize = 161;
 const MIN_CRDS_VALUE_SERIALIZED_SIZE: usize =
     PULL_RESPONSE_MIN_SERIALIZED_SIZE - (PACKET_DATA_SIZE - PULL_RESPONSE_MAX_PAYLOAD_SIZE);
-const MAX_CRDS_VALUES_PER_PACKET: usize =
+pub(crate) const MAX_CRDS_VALUES_PER_PACKET: usize =
     (PULL_RESPONSE_MAX_PAYLOAD_SIZE / MIN_CRDS_VALUE_SERIALIZED_SIZE) + 1;
 // Wincode's preallocation limit is decoded collection memory, not input bytes.
 // Bound it to the largest CRDS value vector that can fit in one gossip packet.
 const GOSSIP_PROTOCOL_PREALLOC_LIMIT: usize =
     MAX_CRDS_VALUES_PER_PACKET * std::mem::size_of::<CrdsValue>();
-type GossipProtocolWincodeConfig =
+pub(crate) type GossipProtocolWincodeConfig =
     wincode::config::Configuration<true, GOSSIP_PROTOCOL_PREALLOC_LIMIT>;
 
 /// Gossip protocol messages base enum
 #[cfg_attr(
-    feature = "frozen-abi",
+    feature = "stable-abi",
     derive(StableAbi, StableAbiSample),
     frozen_abi(
-        abi_digest = "D3Hqum16i1KHnejUD65odaQSbQnJtTQnTJSUoUrjzY2a",
+        abi_digest = "AkRqWQPiVAxNdHUSojq3apD4PEe7T3h7FUmzLwJAPdp3",
         abi_serializer = ["wincode"],
         // `Protocol` has no `PartialEq` and embeds `CrdsValue` (whose `hash` is
         // recomputed on deserialize), so verify the wire round-trip only.
@@ -84,7 +86,7 @@ pub(crate) enum Protocol {
 }
 
 #[cfg_attr(
-    feature = "frozen-abi",
+    feature = "stable-abi",
     frozen_abi(
         abi_digest = "Gab1D5ug6ZAB5sRNmBpoM8JyxsixccLLaWxYZwmueVYA",
         abi_serializer = ["wincode"],
@@ -104,7 +106,7 @@ pub(crate) fn deserialize_protocol(input: &[u8]) -> wincode::ReadResult<Protocol
 }
 
 #[cfg_attr(
-    feature = "frozen-abi",
+    feature = "stable-abi",
     derive(StableAbi, StableAbiSample),
     frozen_abi(
         abi_digest = "GomZf5rFL743zPKH71UShh64JfNvrDBBEC2o2VehinsT",
@@ -199,10 +201,10 @@ impl PruneData {
     }
 
     fn verify_data(&self, use_prefix: bool) -> bool {
-        let data = if !use_prefix {
-            self.signable_data_without_prefix()
-        } else {
+        let data = if use_prefix {
             self.signable_data_with_prefix()
+        } else {
+            self.signable_data_without_prefix()
         };
         self.get_signature()
             .verify(self.pubkey().as_ref(), data.borrow())
@@ -259,8 +261,7 @@ impl Signable for PruneData {
     }
 
     fn signable_data(&self) -> Cow<'static, [u8]> {
-        // Continue to return signable data without a prefix until cluster has upgraded
-        self.signable_data_without_prefix()
+        self.signable_data_with_prefix()
     }
 
     fn get_signature(&self) -> Signature {
@@ -274,7 +275,7 @@ impl Signable for PruneData {
     // override Signable::verify default
     fn verify(&self) -> bool {
         // Try to verify PruneData with both prefixed and non-prefixed data
-        self.verify_data(false) || self.verify_data(true)
+        self.verify_data(true) || self.verify_data(false)
     }
 }
 
@@ -323,8 +324,11 @@ pub(crate) mod tests {
         super::*,
         crate::{
             contact_info::ContactInfo,
-            crds_data::{self, CrdsData, Deprecated, LowestSlot, SnapshotHashes, Vote as CrdsVote},
-            duplicate_shred::{self, MAX_DUPLICATE_SHREDS, tests::new_rand_shred},
+            crds_data::{self, CrdsData, Deprecated, LowestSlot, SnapshotHashes},
+            duplicate_shred::{
+                self, MAX_DUPLICATE_SHREDS,
+                tests::{new_rand_fec_set_index, new_rand_shred},
+            },
             epoch_slots::EpochSlots,
             restart_crds_values::{RestartHeaviestFork, RestartLastVotedForkSlots},
         },
@@ -333,11 +337,8 @@ pub(crate) mod tests {
         solana_hash::Hash,
         solana_keypair::Keypair,
         solana_ledger::shred::Shredder,
-        solana_perf::test_tx::new_test_vote_tx,
         solana_signer::Signer,
         solana_time_utils::timestamp,
-        solana_transaction::Transaction,
-        solana_vote_program::{vote_instruction, vote_state::Vote},
         std::{
             iter::repeat_with,
             net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -406,16 +407,18 @@ pub(crate) mod tests {
 
     #[test]
     fn test_deserialize_protocol_rejects_large_vec_preallocation() {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&2u32.to_le_bytes()); // Protocol::PushMessage.
-        bytes.extend_from_slice(&Pubkey::new_unique().to_bytes());
-        bytes.extend_from_slice(&u64::MAX.to_le_bytes()); // Vec<CrdsValue> length.
+        for num_values in [(MAX_CRDS_VALUES_PER_PACKET + 1) as u64, u64::MAX] {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&2u32.to_le_bytes()); // Protocol::PushMessage.
+            bytes.extend_from_slice(&Pubkey::new_unique().to_bytes());
+            bytes.extend_from_slice(&num_values.to_le_bytes()); // Vec<CrdsValue> length.
 
-        let err = deserialize_protocol(&bytes).unwrap_err();
-        assert!(matches!(
-            err,
-            wincode::ReadError::PreallocationSizeLimit { .. }
-        ));
+            let err = deserialize_protocol(&bytes).unwrap_err();
+            assert!(matches!(
+                err,
+                wincode::ReadError::PreallocationSizeLimit { .. }
+            ));
+        }
     }
 
     #[test]
@@ -487,7 +490,7 @@ pub(crate) mod tests {
         let keypair = Keypair::new();
         let (slot, parent_slot, reference_tick, version) = (53084024, 53084023, 0, 0);
         let shredder = Shredder::new(slot, parent_slot, reference_tick, version).unwrap();
-        let next_shred_index = rng.random_range(0..32_000);
+        let next_shred_index = new_rand_fec_set_index(&mut rng);
         let shred = new_rand_shred(&mut rng, next_shred_index, &shredder, &leader);
         let other_payload = {
             let other_shred = new_rand_shred(&mut rng, next_shred_index, &shredder, &leader);
@@ -545,7 +548,7 @@ pub(crate) mod tests {
         let leader = Arc::new(Keypair::new());
         let (slot, parent_slot, reference_tick, version) = (53084024, 53084023, 0, 0);
         let shredder = Shredder::new(slot, parent_slot, reference_tick, version).unwrap();
-        let next_shred_index = rng.random_range(0..32_000);
+        let next_shred_index = new_rand_fec_set_index(&mut rng);
         let shred = new_rand_shred(&mut rng, next_shred_index, &shredder, &leader);
         let other_payload = {
             let other = new_rand_shred(&mut rng, next_shred_index, &shredder, &leader);
@@ -565,16 +568,13 @@ pub(crate) mod tests {
         .next()
         .unwrap();
 
-        let vote =
-            CrdsVote::new(keypair.pubkey(), new_test_vote_tx(&mut rng), timestamp()).unwrap();
-
         // One representative per CrdsData variant. The array length is keyed to
         // strum::EnumCount, so adding a new CrdsData variant without listing it
         // here is a compile error (wrong array length).
         use strum::EnumCount;
         let variants: [CrdsData; CrdsData::COUNT] = [
             CrdsData::LegacyContactInfo(Deprecated {}),
-            CrdsData::Vote(0, vote),
+            CrdsData::Vote(Deprecated {}),
             CrdsData::LowestSlot(0, LowestSlot::new(Pubkey::new_unique(), 0, timestamp())),
             CrdsData::LegacySnapshotHashes(Deprecated {}),
             CrdsData::AccountsHashes(Deprecated {}),
@@ -599,7 +599,12 @@ pub(crate) mod tests {
             CrdsData::RestartHeaviestFork(RestartHeaviestFork::new_rand(&mut rng, None)),
         ];
 
-        for data in variants {
+        for (discriminant, data) in variants.into_iter().enumerate() {
+            assert_eq!(
+                wincode::serialize(&data).unwrap()[..4],
+                (discriminant as u32).to_le_bytes(),
+                "deprecating a CRDS payload must preserve every wire discriminant"
+            );
             let value = CrdsValue::new_unsigned(data);
             let bytes = wincode::serialize(&value).unwrap();
             // Deprecated variants fail to deserialize; only assert the bound
@@ -754,40 +759,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_vote_size() {
-        let slots = vec![1; 32];
-        let vote = Vote::new(slots, Hash::default());
-        let keypair = Arc::new(Keypair::new());
-
-        // Create the biggest possible vote transaction
-        let vote_ix = vote_instruction::vote_switch(
-            &keypair.pubkey(),
-            &keypair.pubkey(),
-            vote,
-            Hash::default(),
-        );
-        let mut vote_tx = Transaction::new_with_payer(&[vote_ix], Some(&keypair.pubkey()));
-
-        vote_tx.partial_sign(&[keypair.as_ref()], Hash::default());
-        vote_tx.partial_sign(&[keypair.as_ref()], Hash::default());
-
-        let vote = CrdsVote::new(
-            keypair.pubkey(),
-            vote_tx,
-            0, // wallclock
-        )
-        .unwrap();
-        let vote = CrdsValue::new(CrdsData::Vote(1, vote), &Keypair::new());
-        assert!(vote.serialized_size() <= PUSH_MESSAGE_MAX_PAYLOAD_SIZE);
-    }
-
-    #[test]
     fn test_prune_data_sign_and_verify_without_prefix() {
         let mut rng = rand::rng();
         let keypair = Keypair::new();
         let mut prune_data = new_rand_prune_data(&mut rng, &keypair, Some(3));
 
-        prune_data.sign(&keypair);
+        let data = prune_data.signable_data_without_prefix();
+        prune_data.set_signature(keypair.sign_message(data.borrow()));
 
         let is_valid = prune_data.verify();
         assert!(is_valid, "Signature should be valid without prefix");
@@ -799,10 +777,11 @@ pub(crate) mod tests {
         let keypair = Keypair::new();
         let mut prune_data = new_rand_prune_data(&mut rng, &keypair, Some(3));
 
-        // Manually set the signature with prefixed data
+        prune_data.sign(&keypair);
+
         let prefixed_data = prune_data.signable_data_with_prefix();
         let signature_with_prefix = keypair.sign_message(prefixed_data.borrow());
-        prune_data.set_signature(signature_with_prefix);
+        assert_eq!(prune_data.get_signature(), signature_with_prefix);
 
         let is_valid = prune_data.verify();
         assert!(is_valid, "Signature should be valid with prefix");
@@ -852,7 +831,8 @@ pub(crate) mod tests {
         let mut prune_data = new_rand_prune_data(&mut rng, &keypair, Some(3));
 
         // Sign with non-prefixed data
-        prune_data.sign(&keypair);
+        let data = prune_data.signable_data_without_prefix();
+        prune_data.set_signature(keypair.sign_message(data.borrow()));
         let is_valid_non_prefixed = prune_data.verify();
         assert!(
             is_valid_non_prefixed,

@@ -1,9 +1,11 @@
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
+#[cfg(feature = "stable-abi")]
+use solana_frozen_abi_macro::{StableAbi, StableAbiSample, frozen_abi};
 use {
     crate::{
         contact_info::ContactInfo,
-        crds_data::{CrdsData, EpochSlotsIndex, VoteIndex},
+        crds_data::{CrdsData, EpochSlotsIndex},
         duplicate_shred::DuplicateShredIndex,
         epoch_slots::EpochSlots,
         sigverify_cache::SigVerifyCache,
@@ -25,10 +27,10 @@ use {
 
 /// CrdsValue that is replicated across the cluster
 #[cfg_attr(
-    feature = "frozen-abi",
+    feature = "stable-abi",
     derive(StableAbi, StableAbiSample),
     frozen_abi(
-        abi_digest = "4ABukH5bS69APB3bu1hbMiGyeKPw21nzXAVzCRMtKPih",
+        abi_digest = "4U411EAsZdn5bzvATgB75uuv61quNyLNcgVGY2amMVap",
         abi_serializer = ["wincode"],
         // `hash` is recomputed from [signature, data] on deserialize, so it can't
         // match an independently-sampled value; verify the wire round-trip only.
@@ -41,7 +43,7 @@ pub struct CrdsValue {
     data: CrdsData,
     #[wincode(skip)]
     // Not on the wire (recomputed on deserialize); keep it out of the sample.
-    #[cfg_attr(feature = "frozen-abi", stable_abi_sample(with = "Hash::default()"))]
+    #[cfg_attr(feature = "stable-abi", stable_abi_sample(with = "Hash::default()"))]
     hash: Hash, // Sha256 hash of [signature, data].
 }
 
@@ -84,7 +86,6 @@ impl Signable for CrdsValue {
 /// These are labels for values in a record that is associated with `Pubkey`
 #[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub enum CrdsValueLabel {
-    Vote(VoteIndex, Pubkey),
     LowestSlot(Pubkey),
     EpochSlots(EpochSlotsIndex, Pubkey),
     DuplicateShred(DuplicateShredIndex, Pubkey),
@@ -97,7 +98,6 @@ pub enum CrdsValueLabel {
 impl CrdsValueLabel {
     pub fn pubkey(&self) -> Pubkey {
         match self {
-            CrdsValueLabel::Vote(_, p) => *p,
             CrdsValueLabel::LowestSlot(p) => *p,
             CrdsValueLabel::EpochSlots(_, p) => *p,
             CrdsValueLabel::DuplicateShred(_, p) => *p,
@@ -112,7 +112,7 @@ impl CrdsValueLabel {
 impl CrdsValue {
     /// Verify the signature, short-circuiting on a previously-verified value
     /// hash and otherwise reusing a cached decompressed verifying key. Both
-    /// caches are populated only after `verify_strict` succeeds, so neither can
+    /// caches are populated only after `verify_dalek` succeeds, so neither can
     /// be seeded with arbitrary entries to evict useful ones.
     pub(crate) fn verify_with_cache(&self, cache: &SigVerifyCache) -> bool {
         if cache.verified_values.contains(&self.hash) {
@@ -122,14 +122,15 @@ impl CrdsValue {
         let signable_data = self.signable_data();
         let message = signable_data.borrow();
         let sig_bytes: [u8; 64] = self.signature.into();
-        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+        let signature = solana_ed25519::ed_sigs::Signature::from_bytes(&sig_bytes);
         let verified = match cache.verifying_keys.get(&pubkey) {
-            Some(vk) => vk.verify_strict(message, &signature).is_ok(),
+            Some(vk) => vk.verify_dalek(&signature, message).is_ok(),
             None => {
-                let Ok(vk) = ed25519_dalek::VerifyingKey::try_from(pubkey.as_ref()) else {
+                let Ok(vk) = solana_ed25519::ed_sigs::VerificationKey::try_from(pubkey.as_ref())
+                else {
                     return false;
                 };
-                if vk.verify_strict(message, &signature).is_err() {
+                if vk.verify_dalek(&signature, message).is_err() {
                     return false;
                 }
                 cache.verifying_keys.insert(pubkey, vk);
@@ -209,7 +210,6 @@ impl CrdsValue {
     pub fn label(&self) -> CrdsValueLabel {
         let pubkey = self.data.pubkey();
         match self.data {
-            CrdsData::Vote(ix, _) => CrdsValueLabel::Vote(ix, pubkey),
             CrdsData::LowestSlot(_, _) => CrdsValueLabel::LowestSlot(pubkey),
             CrdsData::EpochSlots(ix, _) => CrdsValueLabel::EpochSlots(ix, pubkey),
             CrdsData::DuplicateShred(ix, _) => CrdsValueLabel::DuplicateShred(ix, pubkey),
@@ -221,6 +221,7 @@ impl CrdsValue {
             CrdsData::RestartHeaviestFork(_) => CrdsValueLabel::RestartHeaviestFork(pubkey),
             // Deprecated: sanitize() rejects these before any caller reaches here.
             CrdsData::LegacyContactInfo(_)
+            | CrdsData::Vote(_)
             | CrdsData::LegacySnapshotHashes(_)
             | CrdsData::AccountsHashes(_)
             | CrdsData::LegacyVersion(_)
@@ -296,16 +297,12 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for CrdsValue {
 mod test {
     use {
         super::*,
-        crate::crds_data::{LowestSlot, Vote},
+        crate::crds_data::{LowestSlot, SnapshotHashes},
         rand::SeedableRng as _,
         rand_chacha::ChaChaRng,
         solana_keypair::Keypair,
-        solana_perf::test_tx::new_test_vote_tx,
         solana_signer::Signer,
         solana_time_utils::timestamp,
-        solana_vote::vote_transaction::new_tower_sync_transaction,
-        solana_vote_interface::state::TowerSync,
-        solana_vote_program::vote_state::Lockout,
         std::str::FromStr,
     };
 
@@ -368,20 +365,10 @@ mod test {
 
     #[test]
     fn test_keys_and_values() {
-        let mut rng = rand::rng();
         let v = CrdsValue::new_unsigned(CrdsData::from(ContactInfo::default()));
         assert_eq!(v.wallclock(), 0);
         let key = *v.contact_info().unwrap().pubkey();
         assert_eq!(v.label(), CrdsValueLabel::ContactInfo(key));
-
-        let v = Vote::new(Pubkey::default(), new_test_vote_tx(&mut rng), 0).unwrap();
-        let v = CrdsValue::new_unsigned(CrdsData::Vote(0, v));
-        assert_eq!(v.wallclock(), 0);
-        let key = match &v.data {
-            CrdsData::Vote(_, vote) => vote.from,
-            _ => panic!(),
-        };
-        assert_eq!(v.label(), CrdsValueLabel::Vote(0, key));
 
         let v = CrdsValue::new_unsigned(CrdsData::LowestSlot(
             0,
@@ -397,7 +384,6 @@ mod test {
 
     #[test]
     fn test_signature() {
-        let mut rng = rand::rng();
         let keypair = Keypair::new();
         let wrong_keypair = Keypair::new();
         let mut v = CrdsValue::new_unsigned(CrdsData::from(ContactInfo::new_localhost(
@@ -405,10 +391,7 @@ mod test {
             timestamp(),
         )));
         verify_signatures(&mut v, &keypair, &wrong_keypair);
-        let v = Vote::new(keypair.pubkey(), new_test_vote_tx(&mut rng), timestamp()).unwrap();
-        let mut v = CrdsValue::new_unsigned(CrdsData::Vote(0, v));
-        verify_signatures(&mut v, &keypair, &wrong_keypair);
-        v = CrdsValue::new_unsigned(CrdsData::LowestSlot(
+        let mut v = CrdsValue::new_unsigned(CrdsData::LowestSlot(
             0,
             LowestSlot::new(keypair.pubkey(), 0, timestamp()),
         ));
@@ -462,71 +445,33 @@ mod test {
         let values: Vec<CrdsValue> = vec![
             {
                 let keypair = Keypair::new_from_array(rng.random());
-                let lockouts: [Lockout; 4] = [
-                    Lockout::new_with_confirmation_count(302_388_991, 11),
-                    Lockout::new_with_confirmation_count(302_388_995, 7),
-                    Lockout::new_with_confirmation_count(302_389_001, 3),
-                    Lockout::new_with_confirmation_count(302_389_005, 1),
-                ];
-                let tower_sync = TowerSync {
-                    lockouts: lockouts.into_iter().collect(),
-                    root: Some(302_388_989),
-                    hash: Hash::new_from_array(rng.random()),
-                    timestamp: Some(1_732_044_716_167),
-                    block_id: Hash::new_from_array(rng.random()),
+                let snapshot_hashes = SnapshotHashes {
+                    from: keypair.pubkey(),
+                    full: (302_388_000, Hash::new_from_array(rng.random())),
+                    incremental: vec![],
+                    wallclock: 1_732_045_236_371,
                 };
-                let vote = new_tower_sync_transaction(
-                    tower_sync,
-                    Hash::new_from_array(rng.random()), // blockhash
-                    &keypair,                           // node_keypair
-                    &Keypair::new_from_array(rng.random()), // vote_keypair
-                    &Keypair::new_from_array(rng.random()), // authorized_voter_keypair
-                    None,                               // switch_proof_hash
-                );
-                let vote = Vote::new(
-                    keypair.pubkey(),
-                    vote,
-                    1_732_045_236_371, // wallclock
-                )
-                .unwrap();
-                CrdsValue::new(CrdsData::Vote(5, vote), &keypair)
+                CrdsValue::new(CrdsData::SnapshotHashes(snapshot_hashes), &keypair)
             },
             {
                 let keypair = Keypair::new_from_array(rng.random());
-                let lockouts: [Lockout; 3] = [
-                    Lockout::new_with_confirmation_count(302_410_500, 9),
-                    Lockout::new_with_confirmation_count(302_410_505, 5),
-                    Lockout::new_with_confirmation_count(302_410_517, 1),
-                ];
-                let tower_sync = TowerSync {
-                    lockouts: lockouts.into_iter().collect(),
-                    root: Some(302_410_499),
-                    hash: Hash::new_from_array(rng.random()),
-                    timestamp: Some(1_732_053_615_237),
-                    block_id: Hash::new_from_array(rng.random()),
+                let snapshot_hashes = SnapshotHashes {
+                    from: keypair.pubkey(),
+                    full: (302_400_000, Hash::new_from_array(rng.random())),
+                    incremental: vec![
+                        (302_405_000, Hash::new_from_array(rng.random())),
+                        (302_410_000, Hash::new_from_array(rng.random())),
+                    ],
+                    wallclock: 1_732_053_639_350,
                 };
-                let vote = new_tower_sync_transaction(
-                    tower_sync,
-                    Hash::new_from_array(rng.random()), // blockhash
-                    &keypair,                           // node_keypair
-                    &Keypair::new_from_array(rng.random()), // vote_keypair
-                    &Keypair::new_from_array(rng.random()), // authorized_voter_keypair
-                    None,                               // switch_proof_hash
-                );
-                let vote = Vote::new(
-                    keypair.pubkey(),
-                    vote,
-                    1_732_053_639_350, // wallclock
-                )
-                .unwrap();
-                CrdsValue::new(CrdsData::Vote(5, vote), &keypair)
+                CrdsValue::new(CrdsData::SnapshotHashes(snapshot_hashes), &keypair)
             },
         ];
         let bytes = wincode::serialize(&values).unwrap();
         // Serialized bytes are fixed and should never change.
         assert_eq!(
             solana_sha256_hasher::hash(&bytes),
-            Hash::from_str("BTg284TRo5S5PpbA9YZaab5rKeoLNAj7arwadvG6XVLT").unwrap()
+            Hash::from_str("BVUEGqFaXe9coKD4ad56PPnFKGmaMXTrJe4976AqWyBE").unwrap()
         );
         // serialize -> deserialize should round trip.
         let wincode_values = wincode::deserialize::<Vec<CrdsValue>>(&bytes).unwrap();

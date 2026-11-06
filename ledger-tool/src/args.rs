@@ -119,6 +119,13 @@ pub fn accounts_db_args<'a, 'b>() -> Box<[Arg<'a, 'b>]> {
             .long("accounts-db-skip-initial-hash-calculation")
             .help("Do not verify accounts hash at startup.")
             .hidden(hidden_unless_forced()),
+        Arg::with_name("accounts_db_account_storage_file_format")
+            .long("accounts-db-account-storage-file-format")
+            .takes_value(true)
+            .possible_values(&["append-vec", "split-experimental"])
+            .default_value("append-vec")
+            .help("Selects the account storage file format")
+            .hidden(hidden_unless_forced()),
         Arg::with_name("accounts_db_ancient_append_vecs")
             .long("accounts-db-ancient-append-vecs")
             .value_name("SLOT-OFFSET")
@@ -129,16 +136,6 @@ pub fn accounts_db_args<'a, 'b>() -> Box<[Arg<'a, 'b>]> {
                  together.",
             )
             .hidden(hidden_unless_forced()),
-        Arg::with_name("accounts_db_access_storages_method")
-            .long("accounts-db-access-storages-method")
-            .value_name("METHOD")
-            .takes_value(true)
-            .possible_values(&["mmap", "file"])
-            .help(
-                "[DEPRECATED] Access account storages using this method. This flag is now a \
-                 no-op: storages are always accessed via file I/O. The flag is preserved for \
-                 backward compatibility and will be removed in a future release.",
-            ),
         Arg::with_name("accounts_db_ancient_storage_ideal_size")
             .long("accounts-db-ancient-storage-ideal-size")
             .value_name("BYTES")
@@ -332,19 +329,6 @@ pub fn get_accounts_db_config(
         ..AccountsIndexConfig::default()
     };
 
-    // The `--accounts-db-access-storages-method` flag is now a no-op. Storages are
-    // always accessed via file I/O. The flag is preserved for backward compatibility,
-    // but the value is ignored with a warning.
-    if arg_matches
-        .value_of("accounts_db_access_storages_method")
-        .is_some()
-    {
-        warn!(
-            "`--accounts-db-access-storages-method` is now a no-op; storages are always accessed \
-             via file I/O."
-        );
-    }
-
     let scan_filter_for_shrinking = arg_matches
         .value_of("accounts_db_scan_filter_for_shrinking")
         .map(|filter| match filter {
@@ -357,6 +341,18 @@ pub fn get_accounts_db_config(
             }
         })
         .unwrap_or_default();
+
+    let accounts_file_provider = arg_matches
+        .value_of("accounts_db_account_storage_file_format")
+        .map(|format| match format {
+            "append-vec" => AccountsFileProvider::AppendVec,
+            "split-experimental" => AccountsFileProvider::Split,
+            _ => {
+                // clap will enforce one of the above values is given
+                unreachable!("invalid value given to accounts_db_account_storage_file_format")
+            }
+        })
+        .unwrap();
 
     AccountsDbConfig {
         index: Some(accounts_index_config),
@@ -381,7 +377,8 @@ pub fn get_accounts_db_config(
         partitioned_epoch_rewards_config: PartitionedEpochRewardsConfig::default(),
         scan_filter_for_shrinking,
         num_background_threads: None,
-        accounts_file_provider: AccountsFileProvider::AppendVec,
+        accounts_file_provider,
+        use_direct_io: !arg_matches.is_present("no_accounts_db_snapshots_direct_io"),
     }
 }
 

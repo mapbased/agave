@@ -41,3 +41,5 @@ log-*/
 
 mev-projects/
 
+# download-test-vectors.sh artifacts
+/fd-vectors/

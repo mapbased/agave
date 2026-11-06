@@ -18,16 +18,13 @@ use {
         },
     },
     solana_measure::measure::Measure,
-    solana_message::{VersionedMessage, v0::LoadedAddresses},
+    solana_message::v0::LoadedAddresses,
     solana_metrics::*,
     solana_rpc::{max_slots::MaxSlots, rpc_subscriptions::RpcSubscriptions},
     solana_runtime::bank_forks::BankForks,
     solana_signature::Signature,
     solana_svm_transaction::message_address_table_lookup::SVMMessageAddressTableLookup,
-    solana_transaction::{
-        simple_vote_transaction_checker::is_simple_vote_transaction_impl,
-        versioned::VersionedTransaction,
-    },
+    solana_transaction::versioned::VersionedTransaction,
     std::{
         sync::{
             Arc, RwLock,
@@ -40,18 +37,6 @@ use {
 
 pub type CompletedDataSetsReceiver = Receiver<Vec<CompletedDataSetInfo>>;
 pub type CompletedDataSetsSender = Sender<Vec<CompletedDataSetInfo>>;
-
-/// Check if a versioned transaction is a simple vote transaction.
-/// This avoids cloning by extracting the required data directly.
-fn is_simple_vote_transaction(tx: &VersionedTransaction) -> bool {
-    let is_legacy = matches!(&tx.message, VersionedMessage::Legacy(_));
-    let instruction_programs = tx.message.instructions().iter().filter_map(|ix| {
-        tx.message
-            .static_account_keys()
-            .get(ix.program_id_index as usize)
-    });
-    is_simple_vote_transaction_impl(&tx.signatures, is_legacy, instruction_programs)
-}
 
 /// Result of attempting to load addresses from address lookup tables.
 enum LutLoadResult {
@@ -256,8 +241,6 @@ impl CompletedDataSetsService {
                 };
 
                 stats.total_transactions += 1;
-                let is_vote = is_simple_vote_transaction(tx);
-
                 let mut lut_measure = Measure::start("load_lut");
                 let lut_result = root_bank
                     .map(|bank| load_transaction_addresses(tx, bank))
@@ -284,7 +267,7 @@ impl CompletedDataSetsService {
                     completed_data_set_starting_shred_index,
                     completed_data_set_ending_shred_index_exclusive,
                     signature,
-                    is_vote,
+                    false, // is_vote
                     tx,
                     loaded_addresses.as_ref(),
                 );
@@ -314,6 +297,7 @@ impl CompletedDataSetsService {
 pub mod test {
     use {
         super::*,
+        agave_votor_messages::consensus_message::BlockId,
         crossbeam_channel::bounded,
         solana_entry::{
             block_component::{
@@ -326,10 +310,9 @@ pub mod test {
         solana_instruction::Instruction,
         solana_keypair::Keypair,
         solana_ledger::{
-            blockstore,
-            blockstore::Blockstore,
+            blockstore::{self, Blockstore},
             get_tmp_ledger_path_auto_delete,
-            shred::{ProcessShredsStats, ReedSolomonCache, Shredder, max_ticks_per_n_shreds},
+            shred::{ProcessShredsStats, Shredder, max_ticks_per_n_shreds},
         },
         solana_message::{
             Message, VersionedMessage,
@@ -357,7 +340,6 @@ pub mod test {
         completed_data_set_starting_shred_index: u32,
         completed_data_set_ending_shred_index_exclusive: u32,
         signature: Signature,
-        is_vote: bool,
         transaction: VersionedTransaction,
         loaded_addresses: Option<LoadedAddresses>,
     }
@@ -375,7 +357,7 @@ pub mod test {
             completed_data_set_starting_shred_index: u32,
             completed_data_set_ending_shred_index_exclusive: u32,
             signature: &Signature,
-            is_vote: bool,
+            _is_vote: bool,
             transaction: &VersionedTransaction,
             loaded_addresses: Option<&LoadedAddresses>,
         ) {
@@ -387,7 +369,6 @@ pub mod test {
                     completed_data_set_starting_shred_index,
                     completed_data_set_ending_shred_index_exclusive,
                     signature: *signature,
-                    is_vote,
                     transaction: transaction.clone(),
                     loaded_addresses: loaded_addresses.cloned(),
                 });
@@ -450,24 +431,6 @@ pub mod test {
     }
 
     #[test]
-    fn test_is_simple_vote_transaction_paths() {
-        let vote_instruction =
-            Instruction::new_with_bytes(solana_sdk_ids::vote::ID, &[], Vec::new());
-        let non_vote_instruction =
-            Instruction::new_with_bytes(Pubkey::new_unique(), &[], Vec::new());
-
-        assert!(is_simple_vote_transaction(&legacy_transaction(
-            vote_instruction
-        )));
-        assert!(!is_simple_vote_transaction(&legacy_transaction(
-            non_vote_instruction
-        )));
-        assert!(!is_simple_vote_transaction(&versioned_v0_transaction(
-            Instruction::new_with_bytes(solana_sdk_ids::vote::ID, &[], Vec::new()),
-        )));
-    }
-
-    #[test]
     fn test_load_transaction_addresses_returns_no_lookups_without_lookups() {
         let bank = Bank::new_for_tests(&GenesisConfig::default());
 
@@ -503,7 +466,7 @@ pub mod test {
             &[],
             Vec::new(),
         ));
-        let legacy_non_vote_tx = legacy_transaction(Instruction::new_with_bytes(
+        let legacy_tx = legacy_transaction(Instruction::new_with_bytes(
             Pubkey::new_unique(),
             &[],
             Vec::new(),
@@ -514,11 +477,7 @@ pub mod test {
         };
         let entries = vec![
             next_versioned_entry(&Hash::default(), 1, vec![legacy_vote_tx.clone()]),
-            next_versioned_entry(
-                &Hash::new_unique(),
-                1,
-                vec![legacy_non_vote_tx.clone(), unsigned_tx],
-            ),
+            next_versioned_entry(&Hash::new_unique(), 1, vec![legacy_tx.clone(), unsigned_tx]),
         ];
         let mut stats = DeshredBatchStats::default();
 
@@ -541,14 +500,12 @@ pub mod test {
             9
         );
         assert_eq!(notifications[0].signature, legacy_vote_tx.signatures[0]);
-        assert!(notifications[0].is_vote);
         assert_eq!(notifications[1].completed_data_set_starting_shred_index, 7);
         assert_eq!(
             notifications[1].completed_data_set_ending_shred_index_exclusive,
             9
         );
-        assert_eq!(notifications[1].signature, legacy_non_vote_tx.signatures[0]);
-        assert!(!notifications[1].is_vote);
+        assert_eq!(notifications[1].signature, legacy_tx.signatures[0]);
         assert!(
             notifications
                 .iter()
@@ -658,21 +615,20 @@ pub mod test {
                     Hash::new_unique(),
                     shred_index,
                     shred_index,
-                    &ReedSolomonCache::default(),
                     &mut ProcessShredsStats::default(),
                 )
         };
         let mut shreds = make_marker_shreds(
             VersionedBlockMarker::from_block_header(BlockHeaderV1 {
                 parent_slot: 11,
-                parent_block_id: Hash::new_unique(),
+                parent_block_id: BlockId::new_unique(),
             }),
             0,
         );
         shreds.extend(make_marker_shreds(
             VersionedBlockMarker::from_update_parent(UpdateParentV1 {
                 new_parent_slot: update_parent.parent_slot,
-                new_parent_block_id: update_parent.parent_block_id,
+                new_parent_block_id: BlockId::from(update_parent.parent_block_id),
             }),
             update_parent.update_parent_fec_set_index,
         ));

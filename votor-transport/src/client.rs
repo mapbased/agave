@@ -29,11 +29,11 @@ use {
 
 /// How often the outbound loop reconciles its connection table against the
 /// peer_list. Doubles as the retry interval for failed connects.
-const RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Upper bound on a single handshake attempt, enforced inside the connect task.
 /// Accommodates any plausible RTT with margin.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// State of a peer's entry in the outbound table.
 #[derive(Debug)]
@@ -432,7 +432,7 @@ mod tests {
 
         let (_egress_tx, egress_rx) = mpsc::channel(1);
         let (_identity_tx, identity_rx) = watch::channel(Keypair::new());
-        let (ack, _acks) = crossbeam_channel::unbounded();
+        let (ack, _acks) = crossbeam_channel::bounded(10);
         let (_peer_list_tx, peer_list_rx) = watch::channel(Arc::new(PeerList {
             peers: HashMap::default(),
             push_enabled: true,

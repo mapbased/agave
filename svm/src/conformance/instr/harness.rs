@@ -12,7 +12,7 @@ use {
     solana_account::AccountSharedData,
     solana_instruction_error::InstructionError,
     solana_program_runtime::{
-        invoke_context::InvokeContext, loaded_programs::ProgramCacheForTxBatch,
+        invoke_context::InvokeContext, program_cache::tx_batch::ProgramCacheForTxBatch,
         sysvar_cache::SysvarCache,
     },
     solana_pubkey::Pubkey,
@@ -189,7 +189,7 @@ mod tests {
         let mut sysvar_cache = SysvarCache::default();
         sysvar_cache.fill_missing_entries(|pubkey, callback| {
             if pubkey == &solana_sdk_ids::sysvar::rent::id() {
-                let rent_data = bincode::serialize(&Rent::default()).unwrap();
+                let rent_data = wincode::serialize(&Rent::default()).unwrap();
                 callback(&rent_data);
             }
         });

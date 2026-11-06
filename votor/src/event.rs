@@ -29,8 +29,23 @@ pub struct LeaderWindowInfo {
 pub type VotorEventSender = Sender<VotorEvent>;
 pub type VotorEventReceiver = Receiver<VotorEvent>;
 
+#[derive(Debug, Clone, Copy)]
+pub enum FinalizationType {
+    Slow,
+    Fast,
+}
+
+impl FinalizationType {
+    /// returns `true` if Fast finalization else `false`
+    pub(crate) fn as_bool(self) -> bool {
+        match self {
+            Self::Slow => false,
+            Self::Fast => true,
+        }
+    }
+}
+
 /// Events that trigger actions in Votor
-/// TODO: remove bank hash once we update votes
 #[derive(Debug, Clone)]
 pub enum VotorEvent {
     /// A block has completed replay and is ready for voting
@@ -48,7 +63,7 @@ pub enum VotorEvent {
     /// The pool has marked the given block as a ready parent for `slot`
     ParentReady { slot: Slot, parent_block: Block },
 
-    //// Timeout to early detect that a honest that has crashed and
+    /// Timeout to early detect that an honest leader has crashed and
     /// if the leader window should be skipped.
     TimeoutCrashedLeader(Slot),
 
@@ -66,8 +81,10 @@ pub enum VotorEvent {
     ProduceWindow(LeaderWindowInfo),
 
     /// The block has received a slow or fast finalization certificate and is eligible for rooting
-    /// The second bool indicates whether the block is a fast finalization
-    Finalized(Block, bool),
+    Finalized {
+        block: Block,
+        finalization_type: FinalizationType,
+    },
 
     /// We have not observed a finalization and reached the standstill timeout
     /// The slot is the highest finalized slot
@@ -90,13 +107,10 @@ impl VotorEvent {
                 slot: s,
                 block_id: _,
             })
-            | VotorEvent::Finalized(
-                Block {
-                    slot: s,
-                    block_id: _,
-                },
-                _,
-            )
+            | VotorEvent::Finalized {
+                block: Block { slot: s, .. },
+                ..
+            }
             | VotorEvent::BlockNotarized(Block {
                 slot: s,
                 block_id: _,
@@ -198,14 +212,14 @@ impl LatestSwitchRequest {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, solana_hash::Hash};
+    use {super::*, agave_votor_messages::consensus_message::BlockId, solana_hash::Hash};
 
     fn block(slot: u64, id_byte: u8) -> Block {
         let mut bytes = [0; 32];
         bytes[31] = id_byte;
         Block {
             slot,
-            block_id: Hash::new_from_array(bytes),
+            block_id: BlockId::from(Hash::from(bytes)),
         }
     }
 

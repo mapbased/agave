@@ -2,13 +2,13 @@ use {
     crate::{
         bls_sigverifier::{BAN_TIMEOUT, NUM_SLOTS_FOR_VERIFY},
         errors::SigVerifyCertError,
+        sig_verified_messages::SigVerifiedBatch,
         stats::SigVerifyCertStats,
         utils::send_certs_to_pool,
     },
     agave_bls_cert_verify::cert_verify::Error as BlsCertVerifyError,
     agave_votor_messages::{
         certificate::{Certificate, CertificateType},
-        sig_verified_messages::SigVerifiedBatch,
         unverified_vote_message::UnverifiedCertificate,
     },
     agave_votor_transport::endpoint::BanSender,
@@ -62,7 +62,7 @@ pub(super) fn verify_and_send_certificates(
         return Ok(stats);
     }
 
-    let messages = verify_cert_groups(
+    let verified_certs = verify_cert_groups(
         cert_groups,
         root_bank,
         verified_certs_set,
@@ -70,8 +70,13 @@ pub(super) fn verify_and_send_certificates(
         ban_sender,
         thread_pool,
     );
-    stats.sig_verified_certs += messages.len() as u64;
-    send_certs_to_pool(my_pubkey, messages, channel_to_pool, &mut stats.pool_sender)?;
+    stats.sig_verified_certs += verified_certs.len() as u64;
+    send_certs_to_pool(
+        my_pubkey,
+        verified_certs,
+        channel_to_pool,
+        &mut stats.pool_sender,
+    )?;
 
     measure.stop();
     stats
@@ -84,7 +89,7 @@ pub(super) fn verify_and_send_certificates(
 ///
 /// The valid certs are inserted into the [`verified_certs_set`].
 /// Invalid cert senders are banlisted.
-/// Returns a [`SigVerifiedBatch`] constructed from the valid certs.
+/// Returns a list of [`Certificate`]s constructed from the valid certs.
 fn verify_cert_groups(
     cert_groups: HashMap<CertificateType, Vec<CertPayload>>,
     root_bank: &Bank,
@@ -92,13 +97,13 @@ fn verify_cert_groups(
     stats: &mut SigVerifyCertStats,
     ban_sender: &BanSender,
     thread_pool: &ThreadPool,
-) -> SigVerifiedBatch {
+) -> Vec<Certificate> {
     let results = thread_pool.install(|| {
         cert_groups
             .into_par_iter()
             .map(|(_, certs)| {
                 let num_certs = certs.len();
-                (num_certs, verify_cert_group(certs, root_bank))
+                (num_certs, verify_cert_group(certs, root_bank, thread_pool))
             })
             .collect::<Vec<_>>()
     });
@@ -129,14 +134,18 @@ fn verify_cert_groups(
         }
     }
 
-    SigVerifiedBatch::Certificates(certs)
+    certs
 }
 
-fn verify_cert_group(certs: Vec<CertPayload>, root_bank: &Bank) -> CertVerifyOutcome {
+fn verify_cert_group(
+    certs: Vec<CertPayload>,
+    root_bank: &Bank,
+    thread_pool: &ThreadPool,
+) -> CertVerifyOutcome {
     let mut failures = Vec::new();
 
     for cert_payload in certs {
-        match verify_cert(cert_payload.cert, root_bank) {
+        match verify_cert(cert_payload.cert, root_bank, thread_pool) {
             Ok(cert) => {
                 return CertVerifyOutcome {
                     verified_cert: Some(cert),
@@ -156,9 +165,10 @@ fn verify_cert_group(certs: Vec<CertPayload>, root_bank: &Bank) -> CertVerifyOut
 fn verify_cert(
     cert: UnverifiedCertificate,
     root_bank: &Bank,
+    thread_pool: &ThreadPool,
 ) -> Result<Certificate, BlsCertVerifyError> {
     let cert_slot = cert.cert_type.slot();
     let root_slot = root_bank.slot();
     debug_assert!(cert_slot <= root_slot.saturating_add(NUM_SLOTS_FOR_VERIFY));
-    root_bank.verify_certificate(cert)
+    root_bank.verify_certificate(cert, Some(thread_pool))
 }

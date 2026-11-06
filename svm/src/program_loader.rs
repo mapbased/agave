@@ -1,20 +1,21 @@
 #[cfg(feature = "dev-context-only-utils")]
 use qualifier_attr::qualifiers;
 #[cfg(feature = "metrics")]
-use solana_program_runtime::program_metrics::LoadProgramMetrics;
+use solana_program_runtime::program_cache::metrics::LoadProgramMetrics;
 use {
-    solana_account::{AccountSharedData, ReadableAccount},
+    solana_account::{AccountSharedData, ReadableAccount, state_traits::StateMutWincode as _},
     solana_clock::Slot,
     solana_instruction_error::InstructionError,
     solana_loader_v3_interface::state::UpgradeableLoaderState,
     solana_loader_v4_interface::state::{LoaderV4State, LoaderV4Status},
-    solana_program_runtime::{
-        loaded_programs::{ProgramCacheForTxBatch, ProgramRuntimeEnvironment, ProgramToLoad},
-        program_cache_entry::{ProgramCacheEntry, ProgramCacheEntryOwner},
+    solana_program_runtime::program_cache::{
+        entry::ProgramCacheEntry, env::ProgramRuntimeEnvironment, global::ProgramToLoad,
+        owner::ProgramCacheEntryOwner, tx_batch::ProgramCacheForTxBatch,
     },
     solana_pubkey::Pubkey,
+    solana_sbpf::elf_parser::consts::ELFMAG,
     solana_sdk_ids::{bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, loader_v4},
-    solana_svm_callback::TransactionProcessingCallback,
+    solana_svm_callback::AccountLoadCallback,
     solana_svm_timings::ExecuteTimings,
     solana_svm_type_overrides::sync::Arc,
     solana_transaction_error::{TransactionError, TransactionResult},
@@ -30,7 +31,7 @@ pub(crate) enum ProgramAccountLoadResult {
     ProgramOfLoaderV4(AccountSharedData, Slot),
 }
 
-pub(crate) fn load_program_accounts<CB: TransactionProcessingCallback>(
+pub(crate) fn load_program_accounts<CB: AccountLoadCallback>(
     callbacks: &CB,
     pubkey: &Pubkey,
 ) -> Option<ProgramAccountLoadResult> {
@@ -49,7 +50,7 @@ pub(crate) fn load_program_accounts<CB: TransactionProcessingCallback>(
     } else if bpf_loader_upgradeable::check_id(program_account.owner()) {
         if let Ok(UpgradeableLoaderState::Program {
             programdata_address,
-        }) = bincode::deserialize(program_account.data())
+        }) = program_account.state()
         {
             if let Some(programdata_account) =
                 callbacks.get_account_shared_data(&programdata_address)
@@ -58,7 +59,7 @@ pub(crate) fn load_program_accounts<CB: TransactionProcessingCallback>(
                     if let Ok(UpgradeableLoaderState::ProgramData {
                         slot,
                         upgrade_authority_address: _,
-                    }) = bincode::deserialize(programdata_account.data())
+                    }) = programdata_account.state()
                     {
                         ProgramAccountLoadResult::ProgramOfLoaderV3(
                             program_account,
@@ -95,7 +96,7 @@ pub(crate) fn load_program_accounts<CB: TransactionProcessingCallback>(
 /// If the account doesn't exist it returns `None`. If the account does exist, it must be a program
 /// account (belong to one of the program loaders). Returns `Some(InvalidAccountData)` if the program
 /// account is `Closed`, contains invalid data or any of the programdata accounts are invalid.
-pub fn load_program_with_pubkey<CB: TransactionProcessingCallback>(
+pub fn load_program_with_pubkey<CB: AccountLoadCallback>(
     callbacks: &CB,
     program_runtime_environment: &ProgramRuntimeEnvironment,
     pubkey: &Pubkey,
@@ -183,11 +184,10 @@ pub fn load_program_with_pubkey<CB: TransactionProcessingCallback>(
 
     #[cfg(feature = "metrics")]
     load_program_metrics.submit_datapoint(&mut execute_timings.details);
-    loaded_program.update_access_slot(current_slot);
     Some(Arc::new(loaded_program))
 }
 
-fn get_program_deployment_slot<CB: TransactionProcessingCallback>(
+fn get_program_deployment_slot<CB: AccountLoadCallback>(
     callbacks: &CB,
     program: &AccountSharedData,
     loader: ProgramCacheEntryOwner,
@@ -196,10 +196,10 @@ fn get_program_deployment_slot<CB: TransactionProcessingCallback>(
         ProgramCacheEntryOwner::LoaderV1 | ProgramCacheEntryOwner::LoaderV2 => {
             // V1 & V2 programs are immutable and hold no deployment metadata.
             // As long as there is *some* kind of ELF present, return slot 0.
-            if program.data().is_empty() {
-                Err(TransactionError::ProgramAccountNotFound)
-            } else {
+            if program.data().starts_with(&ELFMAG) {
                 Ok(0)
+            } else {
+                Err(TransactionError::ProgramAccountNotFound)
             }
         }
         ProgramCacheEntryOwner::LoaderV3 => {
@@ -207,7 +207,7 @@ fn get_program_deployment_slot<CB: TransactionProcessingCallback>(
             // a valid ProgramData account.
             if let Ok(UpgradeableLoaderState::Program {
                 programdata_address,
-            }) = bincode::deserialize(program.data())
+            }) = program.state()
             {
                 let programdata = callbacks
                     .get_account_shared_data(&programdata_address)
@@ -218,7 +218,7 @@ fn get_program_deployment_slot<CB: TransactionProcessingCallback>(
                 if let Ok(UpgradeableLoaderState::ProgramData {
                     slot,
                     upgrade_authority_address: _,
-                }) = bincode::deserialize(programdata.data())
+                }) = programdata.state()
                 {
                     return Ok(slot);
                 }
@@ -257,7 +257,7 @@ fn get_program_deployment_slot<CB: TransactionProcessingCallback>(
 // to reload, and insert a closed tombstone, BUT it will not remove the program
 // from the search list, resulting in reload loop.
 #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-pub(crate) fn filter_executable_program_accounts<'a, CB: TransactionProcessingCallback>(
+pub(crate) fn filter_executable_program_accounts<'a, CB: AccountLoadCallback>(
     callbacks: &CB,
     program_cache_for_tx_batch: &ProgramCacheForTxBatch,
     keys: impl Iterator<Item = &'a Pubkey>,
@@ -333,33 +333,29 @@ pub mod test_utils {
     }
 
     pub fn loader_v3_program_account(programdata_address: Pubkey) -> AccountSharedData {
-        let mut account = AccountSharedData::default();
-        account.set_owner(bpf_loader_upgradeable::id());
-        account.set_data_from_slice(
-            &bincode::serialize(&UpgradeableLoaderState::Program {
+        AccountSharedData::new_data(
+            0,
+            &UpgradeableLoaderState::Program {
                 programdata_address,
-            })
-            .unwrap(),
-        );
-        account
+            },
+            &bpf_loader_upgradeable::id(),
+        )
+        .unwrap()
     }
 
     pub fn loader_v3_programdata_account(slot: Slot, elf: &[u8]) -> AccountSharedData {
         let offset = UpgradeableLoaderState::size_of_programdata_metadata();
-        let mut data = vec![0u8; offset];
-        bincode::serialize_into(
-            &mut data[..offset],
+        let mut account = AccountSharedData::new_data_with_space(
+            0,
             &UpgradeableLoaderState::ProgramData {
                 slot,
                 upgrade_authority_address: None,
             },
+            offset + elf.len(),
+            &bpf_loader_upgradeable::id(),
         )
         .unwrap();
-        data.extend_from_slice(elf);
-
-        let mut account = AccountSharedData::default();
-        account.set_owner(bpf_loader_upgradeable::id());
-        account.set_data_from_slice(&data);
+        account.data_as_mut_slice()[offset..].copy_from_slice(elf);
         account
     }
 
@@ -387,11 +383,11 @@ mod tests {
         solana_keypair::Keypair,
         solana_message::compiled_instruction::CompiledInstruction,
         solana_program_runtime::{
-            loaded_programs::{
-                BlockRelation, ForkGraph, ProgramRuntimeEnvironment,
-                get_mock_program_runtime_environment,
+            program_cache::{
+                entry::ProgramCacheEntryType,
+                env::{ProgramRuntimeEnvironment, get_mock_program_runtime_environment},
+                fork_graph::{BlockRelation, ForkGraph},
             },
-            program_cache_entry::ProgramCacheEntryType,
             solana_sbpf::program::BuiltinProgram,
         },
         solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader},
@@ -414,7 +410,7 @@ mod tests {
         pub(crate) account_shared_data: RefCell<HashMap<Pubkey, AccountSharedData>>,
     }
 
-    impl TransactionProcessingCallback for MockBankCallback {
+    impl AccountLoadCallback for MockBankCallback {
         fn get_account_shared_data(&self, pubkey: &Pubkey) -> Option<AccountSharedData> {
             self.account_shared_data.borrow().get(pubkey).cloned()
         }
@@ -577,7 +573,7 @@ mod tests {
         // Fail: invalid state
         let mut program_account = AccountSharedData::default();
         program_account.set_owner(loader_v4::id());
-        program_account.set_data_from_slice(&[0u8; 4]);
+        program_account.set_data_from_slice(&[0u8; 4]); // `Uninitialized`
         mock_bank
             .account_shared_data
             .borrow_mut()
@@ -859,13 +855,11 @@ mod tests {
         let mock_bank = MockBankCallback::default();
         let batch_processor = TransactionBatchProcessor::<TestForkGraph>::default();
 
-        let mut account_data = AccountSharedData::default();
-        account_data.set_owner(bpf_loader_upgradeable::id());
-
         let state = UpgradeableLoaderState::Program {
             programdata_address: key2,
         };
-        account_data.set_data_from_slice(&bincode::serialize(&state).unwrap());
+        let mut account_data =
+            AccountSharedData::new_data(0, &state, &bpf_loader_upgradeable::id()).unwrap();
         mock_bank
             .account_shared_data
             .borrow_mut()
@@ -875,8 +869,7 @@ mod tests {
             slot: 0,
             upgrade_authority_address: None,
         };
-        let mut account_data2 = AccountSharedData::default();
-        account_data2.set_data_from_slice(&bincode::serialize(&state).unwrap());
+        let account_data2 = AccountSharedData::new_data(0, &state, &Pubkey::default()).unwrap();
         mock_bank
             .account_shared_data
             .borrow_mut()
@@ -897,7 +890,7 @@ mod tests {
         assert_eq!(entry, Arc::new(loaded_program));
 
         let mut buffer = load_test_program();
-        let mut header = bincode::serialize(&state).unwrap();
+        let mut header = wincode::serialize(&state).unwrap();
         let mut complement = vec![
             0;
             std::cmp::max(
@@ -1059,7 +1052,7 @@ mod tests {
             );
 
             // Success
-            account.set_data_from_slice(&[1u8; 4]);
+            account.set_data_from_slice(&ELFMAG);
             assert_eq!(
                 get_program_deployment_slot(&mock_bank, &account, loader).unwrap(),
                 0 // <-- slot is always zero for both loaders
@@ -1075,7 +1068,7 @@ mod tests {
 
         // Fail: program account invalid state
         let invalid_program_account =
-            AccountSharedData::new(100, 100, &bpf_loader_upgradeable::id());
+            AccountSharedData::new_with_data(100, vec![0; 100], &bpf_loader_upgradeable::id());
         assert_eq!(
             get_program_deployment_slot(
                 &mock_bank,
@@ -1155,7 +1148,7 @@ mod tests {
         // Fail: invalid state
         let mut program_account = AccountSharedData::default();
         program_account.set_owner(loader_v4::id());
-        program_account.set_data_from_slice(&[0u8; 4]);
+        program_account.set_data_from_slice(&[0u8; 4]); // `Uninitialized`
         assert_eq!(
             get_program_deployment_slot(
                 &mock_bank,
@@ -1246,17 +1239,18 @@ mod tests {
                     latest_access_slot: AtomicU64::default(),
                 }),
             );
+            mock_bank.account_shared_data.borrow_mut().insert(
+                loader_ids[i],
+                AccountSharedData::new_with_data(1, vec![0; 1], &program_ids[3]),
+            );
+            let program = AccountSharedData::new_with_data(1, ELFMAG.to_vec(), &loader_ids[i]);
             mock_bank
                 .account_shared_data
                 .borrow_mut()
-                .insert(loader_ids[i], AccountSharedData::new(1, 1, &program_ids[3]));
-            mock_bank
-                .account_shared_data
-                .borrow_mut()
-                .insert(program_ids[i], AccountSharedData::new(1, 1, &loader_ids[i]));
+                .insert(program_ids[i], program);
             mock_bank.account_shared_data.borrow_mut().insert(
                 account_ids[i],
-                AccountSharedData::new(1, 1, &program_ids[i]),
+                AccountSharedData::new_with_data(1, vec![0; 1], &program_ids[i]),
             );
         }
 
@@ -1264,8 +1258,7 @@ mod tests {
         let state = UpgradeableLoaderState::Program {
             programdata_address,
         };
-        let mut program = AccountSharedData::new(1, 1, &loader_ids[2]);
-        program.set_data_from_slice(&bincode::serialize(&state).unwrap());
+        let program = AccountSharedData::new_data(1, &state, &loader_ids[2]).unwrap();
         mock_bank
             .account_shared_data
             .borrow_mut()
@@ -1274,8 +1267,7 @@ mod tests {
             slot: 0,
             upgrade_authority_address: None,
         };
-        let mut programdata = AccountSharedData::new(1, 1, &loader_ids[2]);
-        programdata.set_data_from_slice(&bincode::serialize(&state).unwrap());
+        let programdata = AccountSharedData::new_data(1, &state, &loader_ids[2]).unwrap();
         mock_bank
             .account_shared_data
             .borrow_mut()
@@ -1402,15 +1394,22 @@ mod tests {
                 .insert(key, empty);
             assert!(filter_executable_program_accounts(&mock_bank, &batch, keys.iter()).is_empty());
 
-            // Any non-empty data is considered to *maybe* be a program.
+            // Same goes for non-empty but zero filled data.
             let mut account = AccountSharedData::default();
             account.set_owner(owner);
-            account.set_data_from_slice(&[1u8; 4]);
+            account.set_data_from_slice(&[0u8; 4]); // `Uninitialized`
+            mock_bank
+                .account_shared_data
+                .borrow_mut()
+                .insert(key, account.clone());
+            assert!(filter_executable_program_accounts(&mock_bank, &batch, keys.iter()).is_empty());
+
+            // Account must start with ELFMAG to be considered a program.
+            account.set_data_from_slice(&ELFMAG);
             mock_bank
                 .account_shared_data
                 .borrow_mut()
                 .insert(key, account);
-
             let result = filter_executable_program_accounts(&mock_bank, &batch, keys.iter());
             assert_eq!(result.len(), 1);
             let program_to_load = result.first().unwrap();

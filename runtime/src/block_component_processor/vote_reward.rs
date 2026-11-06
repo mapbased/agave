@@ -20,7 +20,6 @@ use {
 };
 
 pub(crate) mod epoch_inflation_account_state;
-mod migration_test;
 
 /// Different types of errors that can happen when calculating and paying voting reward.
 ///
@@ -113,17 +112,13 @@ impl VoteState {
     }
 
     fn serialize(self) -> Option<(Pubkey, AccountSharedData)> {
-        let mut updated_account = AccountSharedData::new_rent_epoch(
-            self.lamports,
-            self.space,
-            &self.owner,
-            RENT_EXEMPT_RENT_EPOCH,
-        );
-        match self
-            .handler
-            .serialize_into(updated_account.data_as_mut_slice())
-        {
-            Ok(()) => Some((self.vote_pubkey, updated_account)),
+        match self.handler.serialize_padded(self.space) {
+            Ok(data) => {
+                let mut updated_account =
+                    AccountSharedData::new_with_data(self.lamports, data, &self.owner);
+                updated_account.set_rent_epoch(RENT_EXEMPT_RENT_EPOCH);
+                Some((self.vote_pubkey, updated_account))
+            }
             Err(e) => {
                 info!(
                     "serializing account vote_pubkey={} failed with {e}",
@@ -427,15 +422,17 @@ fn update_accounts(
 
 /// Calculates voting rewards based on the `reward_cert` and updates fields in the vote account
 /// based on the calculated rewards and the `final_cert_input`.
+///
+/// Returns number of vote accounts updated.
 pub(super) fn calc_vote_rewards_update_vote_states(
     bank: &Bank,
     reward_cert: Option<ValidatedRewardCert>,
     final_cert_input: Option<(&HashSet<Pubkey>, Slot)>,
     block_producer_time_nanos: i64,
-) -> Result<(), CalcVoteRewardUpdateVoteStatesError> {
+) -> Result<usize, CalcVoteRewardUpdateVoteStatesError> {
     let Some(updated_accounts) = allocate_updated_accounts(bank, &reward_cert, &final_cert_input)?
     else {
-        return Ok(());
+        return Ok(0);
     };
     let reward_state = match &reward_cert {
         Some(c) => Some(RewardState::try_new(
@@ -452,7 +449,7 @@ pub(super) fn calc_vote_rewards_update_vote_states(
     let vote_accounts = bank.vote_accounts();
 
     let updated_accounts = match (&reward_state, &final_cert_state) {
-        (None, None) => return Ok(()),
+        (None, None) => return Ok(0),
         (Some(state), None) => update_accounts(
             &reward_state,
             &final_cert_state,
@@ -477,7 +474,7 @@ pub(super) fn calc_vote_rewards_update_vote_states(
     };
 
     bank.store_accounts((bank.slot(), updated_accounts.as_slice()), None);
-    Ok(())
+    Ok(updated_accounts.len())
 }
 
 /// Computes the voting reward in Lamports.
@@ -602,9 +599,8 @@ mod tests {
         crate::{
             bank_forks::BankForks,
             genesis_utils::{
-                ValidatorVoteKeypairs, activate_all_features_alpenglow,
-                create_genesis_config_with_alpenglow_vote_accounts,
-                create_genesis_config_with_leader_ex, create_validator,
+                ValidatorVoteKeypairs, create_genesis_config_with_leader_ex,
+                create_genesis_config_with_vote_accounts, create_validator,
             },
             inflation_rewards::{MAX_BPS, commission_split_preserve_lamports},
             stake_utils,
@@ -618,7 +614,9 @@ mod tests {
         },
         bitvec::prelude::*,
         rand::seq::IndexedRandom,
-        solana_account::{Account, ReadableAccount, WritableAccount},
+        solana_account::{
+            Account, ReadableAccount, WritableAccount, state_traits::StateMutWincode as _,
+        },
         solana_bls_signatures::{BLS_SIGNATURE_AFFINE_SIZE, Signature as BLSSignature},
         solana_cluster_type::ClusterType,
         solana_epoch_schedule::EpochSchedule,
@@ -745,7 +743,7 @@ mod tests {
         let validator_keypairs = (0..num_validators)
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
-        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+        let mut genesis_config = create_genesis_config_with_vote_accounts(
             1_000_000_000,
             &validator_keypairs,
             vec![per_validator_stake; validator_keypairs.len()],
@@ -844,7 +842,7 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let per_validator_stake = LAMPORTS_PER_SOL * 100;
-        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+        let mut genesis_config = create_genesis_config_with_vote_accounts(
             1_000_000_000,
             &validator_keypairs,
             vec![per_validator_stake; validator_keypairs.len()],
@@ -915,7 +913,7 @@ mod tests {
             .map(|_| ValidatorVoteKeypairs::new_rand())
             .collect::<Vec<_>>();
         let per_validator_stake = LAMPORTS_PER_SOL * 100;
-        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+        let mut genesis_config = create_genesis_config_with_vote_accounts(
             1_000_000_000,
             &validator_keypairs,
             vec![per_validator_stake; validator_keypairs.len()],
@@ -996,7 +994,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+        let mut genesis_config = create_genesis_config_with_vote_accounts(
             1_000_000_000,
             &validator_keypairs,
             vec![per_validator_stake; validator_keypairs.len()],
@@ -1053,7 +1051,7 @@ mod tests {
         for validator in validators {
             let vote_pubkey = validator.vote_keypair.pubkey();
             let account = genesis_config.accounts.get_mut(&vote_pubkey).unwrap();
-            let vote_state_versions = wincode::deserialize(&account.data).unwrap();
+            let vote_state_versions = account.state().unwrap();
             let VoteStateVersions::V4(mut vote_state) = vote_state_versions else {
                 panic!();
             };
@@ -1135,7 +1133,6 @@ mod tests {
                 vec![],
             );
             genesis_config.epoch_schedule = EpochSchedule::without_warmup();
-            activate_all_features_alpenglow(&mut genesis_config);
             for (ind, keypair) in validators.iter().enumerate().skip(1) {
                 let node_pubkey = keypair.node_keypair.pubkey();
                 let vote_pubkey = keypair.vote_keypair.pubkey();
@@ -1644,7 +1641,7 @@ mod tests {
         let slots_per_epoch = 32;
         let stake = 200_000_000 * LAMPORTS_PER_SOL;
         let validators = vec![ValidatorVoteKeypairs::new_rand()];
-        let mut genesis_config = create_genesis_config_with_alpenglow_vote_accounts(
+        let mut genesis_config = create_genesis_config_with_vote_accounts(
             100_000_000 * LAMPORTS_PER_SOL,
             &validators,
             vec![stake],

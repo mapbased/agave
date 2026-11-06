@@ -8,8 +8,8 @@ use {
         VmSerializedAccountMetadata as ProtoVmSerializedAccountMetadata,
     },
     solana_program_runtime::{
-        invoke_context::InvokeContext, loaded_programs::ProgramCacheForTxBatch,
-        memory_context::SerializedAccountMetadata, solana_sbpf::memory_region::MemoryRegion,
+        invoke_context::InvokeContext, memory_context::SerializedAccountMetadata,
+        program_cache::tx_batch::ProgramCacheForTxBatch, solana_sbpf::memory_region::MemoryRegion,
     },
     solana_svm::conformance::{
         callback::DefaultCallback,
@@ -181,7 +181,7 @@ mod tests {
             address: sysvar::rent::id().to_bytes().to_vec(),
             lamports: 1,
             data_repr: Some(DataRepr::Data(
-                bincode::serialize(&Rent::default()).unwrap(),
+                wincode::serialize(&Rent::default()).unwrap(),
             )),
             executable: false,
             owner: sysvar::id().to_bytes().to_vec(),

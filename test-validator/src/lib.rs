@@ -1,7 +1,7 @@
 #![cfg(feature = "agave-unstable-api")]
 #![allow(clippy::arithmetic_side_effects)]
 use {
-    agave_feature_set::{FEATURE_NAMES, FeatureSet, alpenglow, raise_cpi_nesting_limit_to_8},
+    agave_feature_set::{FEATURE_NAMES, FeatureSet, raise_cpi_nesting_limit_to_8},
     agave_snapshots::{
         SnapshotInterval, paths::BANK_SNAPSHOTS_DIR, snapshot_config::SnapshotConfig,
     },
@@ -11,13 +11,12 @@ use {
     crossbeam_channel::Receiver,
     log::*,
     solana_account::{
-        Account, AccountSharedData, ReadableAccount, WritableAccount,
-        state_traits::StateMutWincode as _,
+        Account, AccountSharedData, ReadableAccount, state_traits::StateMutWincode as _,
     },
     solana_accounts_db::{
         accounts_db::{ACCOUNTS_DB_CONFIG_FOR_TESTING, AccountsDbConfig},
         accounts_index::{AccountsIndexConfig, ScanFilter},
-        utils::create_accounts_run_and_snapshot_dirs,
+        utils::create_accounts_run_dir,
     },
     solana_bls_signatures::keypair::Keypair as BLSKeypair,
     solana_cli_output::CliAccount,
@@ -26,15 +25,12 @@ use {
     solana_compute_budget::compute_budget::ComputeBudget,
     solana_core::{
         admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
-        consensus::tower_storage::TowerStorage,
         validator::{Validator, ValidatorConfig, ValidatorStartProgress, ValidatorTpuConfig},
     },
     solana_epoch_schedule::EpochSchedule,
     solana_fee_calculator::FeeRateGovernor,
     solana_genesis_utils::MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
-    solana_geyser_plugin_manager::{
-        GeyserPluginManagerRequest, geyser_plugin_manager::GeyserPluginManager,
-    },
+    solana_geyser_plugin_manager::{GeyserPluginHost, GeyserPluginManagerRequest},
     solana_gossip::{
         cluster_info::{ClusterInfo, DEFAULT_NUM_VOTOR_QUIC_ENDPOINTS, NodeConfig},
         contact_info::Protocol,
@@ -64,8 +60,7 @@ use {
         client_error::Error as RpcClientError, request::MAX_MULTIPLE_ACCOUNTS,
     },
     solana_runtime::{
-        bank_forks::BankForks,
-        genesis_utils::{activate_alpenglow_at_genesis, create_genesis_config_with_leader_ex},
+        bank_forks::BankForks, genesis_utils::create_genesis_config_with_leader_ex,
         runtime_config::RuntimeConfig,
     },
     solana_sbpf::{elf::Executable, verifier::RequisiteVerifier},
@@ -143,7 +138,6 @@ impl TestValidatorNodeConfig {
 pub struct TestValidatorGenesis {
     fee_rate_governor: FeeRateGovernor,
     ledger_path: Option<PathBuf>,
-    tower_storage: Option<Arc<dyn TowerStorage>>,
     pub rent: Rent,
     rpc_config: JsonRpcConfig,
     pubsub_config: PubSubConfig,
@@ -167,18 +161,15 @@ pub struct TestValidatorGenesis {
     compute_unit_limit: Option<u64>,
     pub log_messages_bytes_limit: Option<usize>,
     pub transaction_account_lock_limit: Option<usize>,
-    pub geyser_plugin_manager: Arc<ArcSwap<GeyserPluginManager>>,
+    pub geyser_plugin_manager: Arc<ArcSwap<GeyserPluginHost>>,
     pub admin_rpc_service_post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
 }
 
 impl Default for TestValidatorGenesis {
     fn default() -> Self {
-        // Default to Tower consensus to ensure proper converage pre-Alpenglow.
-        let deactivate_feature_set = [alpenglow::id()].into_iter().collect();
         Self {
             fee_rate_governor: FeeRateGovernor::default(),
             ledger_path: Option::<PathBuf>::default(),
-            tower_storage: Option::<Arc<dyn TowerStorage>>::default(),
             rent: Rent::default(),
             rpc_config: JsonRpcConfig::default_for_test(),
             pubsub_config: PubSubConfig::default_for_tests(),
@@ -198,11 +189,11 @@ impl Default for TestValidatorGenesis {
             max_genesis_archive_unpacked_size: Option::<u64>::default(),
             geyser_plugin_config_files: Option::<Vec<PathBuf>>::default(),
             enable_scheduler_bindings: false,
-            deactivate_feature_set,
+            deactivate_feature_set: HashSet::default(),
             compute_unit_limit: Option::<u64>::default(),
             log_messages_bytes_limit: Option::<usize>::default(),
             transaction_account_lock_limit: Option::<usize>::default(),
-            geyser_plugin_manager: Arc::new(ArcSwap::new(Arc::new(GeyserPluginManager::default()))),
+            geyser_plugin_manager: Arc::new(ArcSwap::new(Arc::new(GeyserPluginHost::default()))),
             admin_rpc_service_post_init:
                 Arc::<RwLock<Option<AdminRpcRequestMetadataPostInit>>>::default(),
         }
@@ -244,18 +235,18 @@ fn try_transform_program_data(
         if let Ok(UpgradeableLoaderState::ProgramData {
             upgrade_authority_address,
             ..
-        }) = bincode::deserialize::<UpgradeableLoaderState>(programdata_meta)
+        }) = wincode::deserialize::<UpgradeableLoaderState>(programdata_meta)
         {
             // Serialize new programdata metadata into the resulting account,
             // to overwrite the deployment slot to `0`.
-            bincode::serialize_into(
-                account.data_as_mut_slice(),
-                &UpgradeableLoaderState::ProgramData {
+            account
+                .set_state(&UpgradeableLoaderState::ProgramData {
                     slot: 0,
                     upgrade_authority_address,
-                },
-            )
-            .map_err(|_| format!("Failed to write to upgradeable programdata account {address}"))
+                })
+                .map_err(|_| {
+                    format!("Failed to write to upgradeable programdata account {address}")
+                })
         } else {
             Err(format!(
                 "Failed to read upgradeable programdata account {address}"
@@ -275,18 +266,8 @@ impl TestValidatorGenesis {
         self
     }
 
-    pub fn activate_alpenglow(&mut self) -> &mut Self {
-        self.deactivate_feature_set.remove(&alpenglow::id());
-        self
-    }
-
     pub fn ledger_path<P: Into<PathBuf>>(&mut self, ledger_path: P) -> &mut Self {
         self.ledger_path = Some(ledger_path.into());
-        self
-    }
-
-    pub fn tower_storage(&mut self, tower_storage: Arc<dyn TowerStorage>) -> &mut Self {
-        self.tower_storage = Some(tower_storage);
         self
     }
 
@@ -918,8 +899,6 @@ impl TestValidator {
                 warn!("Feature {feature:?} set for deactivation is not a known Feature public key",)
             }
         }
-        let is_alpenglow_active = feature_set.is_active(&alpenglow::id());
-
         let runtime_features = feature_set.runtime_features();
         let program_runtime_environment = create_program_runtime_environment(
             &runtime_features,
@@ -956,7 +935,7 @@ impl TestValidator {
                 &[upgradeable_program.program_id.as_ref()],
                 &upgradeable_program.loader,
             );
-            let mut program_data = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            let mut program_data = wincode::serialize(&UpgradeableLoaderState::ProgramData {
                 slot: 0,
                 upgrade_authority_address: Some(upgradeable_program.upgrade_authority),
             })
@@ -973,7 +952,7 @@ impl TestValidator {
                 }),
             );
 
-            let data = bincode::serialize(&UpgradeableLoaderState::Program {
+            let data = wincode::serialize(&UpgradeableLoaderState::Program {
                 programdata_address,
             })
             .unwrap();
@@ -1008,9 +987,6 @@ impl TestValidator {
             &feature_set,
             accounts.into_iter().collect(),
         );
-        if is_alpenglow_active {
-            activate_alpenglow_at_genesis(&mut genesis_config);
-        }
         genesis_config.epoch_schedule = config
             .epoch_schedule
             .as_ref()
@@ -1168,7 +1144,7 @@ impl TestValidator {
             ..RuntimeConfig::default()
         };
 
-        let mut validator_config = ValidatorConfig {
+        let validator_config = ValidatorConfig {
             on_start_geyser_plugin_config_files: config.geyser_plugin_config_files.clone(),
             rpc_addrs: Some((
                 SocketAddr::new(
@@ -1182,11 +1158,7 @@ impl TestValidator {
             )),
             rpc_config: config.rpc_config.clone(),
             pubsub_config: config.pubsub_config.clone(),
-            account_paths: vec![
-                create_accounts_run_and_snapshot_dirs(ledger_path.join("accounts"))
-                    .unwrap()
-                    .0,
-            ],
+            account_paths: vec![create_accounts_run_dir(ledger_path.join("accounts")).unwrap()],
             run_verification: false, // Skip PoH verification of ledger on startup for speed
             snapshot_config: SnapshotConfig {
                 full_snapshot_archive_interval: SnapshotInterval::Slots(
@@ -1203,16 +1175,12 @@ impl TestValidator {
             warp_slot: config.warp_slot,
             validator_exit: config.validator_exit.clone(),
             blockstore_cleanup_strategy: config.blockstore_cleanup_strategy,
-            no_wait_for_vote_to_start_leader: true,
             staked_nodes_overrides: config.staked_nodes_overrides.clone(),
             accounts_db_config,
             runtime_config,
             enable_scheduler_bindings: config.enable_scheduler_bindings,
             ..ValidatorConfig::default_for_test()
         };
-        if let Some(ref tower_storage) = config.tower_storage {
-            validator_config.tower_storage = tower_storage.clone();
-        }
 
         let validator = Some(Validator::new(
             node,
@@ -1275,7 +1243,7 @@ impl TestValidator {
     /// programs added to genesis ain't immediately usable. Actively check "Program
     /// is not deployed" error for their availibility.
     ///
-    /// Returns `TransactionError::AccountNotFound` if the payer account is not funded.
+    /// Returns `TransactionError::InvalidAccountForFee` if the payer account is not funded.
     /// The caller is responsible for ensuring the payer account has sufficient funds.
     async fn wait_for_upgradeable_programs_deployed(
         &self,
@@ -1313,10 +1281,10 @@ impl TestValidator {
                             let err_string = format!("{e:?}");
                             if err_string.contains("Program is not deployed") {
                                 debug!("{program_id:?} - not deployed");
-                            } else if err_string.contains("AccountNotFound") {
+                            } else if err_string.contains("InvalidAccountForFee") {
                                 // Payer account not funded - this is a caller error
                                 return Err(RpcClientError::from(
-                                    TransactionError::AccountNotFound,
+                                    TransactionError::InvalidAccountForFee,
                                 ));
                             } else {
                                 // Assuming all other errors could only occur *after*
@@ -1421,7 +1389,9 @@ impl Drop for TestValidator {
     }
 }
 
+// Each test starts a full validator; serialize them to avoid resource contention.
 #[cfg(test)]
+#[serial_test::serial]
 mod test {
     use {super::*, solana_feature_gate_interface::Feature};
 
@@ -1434,7 +1404,7 @@ mod test {
             let active_feature_accounts = rpc_client.get_multiple_accounts(chunk).await.unwrap();
             for feature_account in active_feature_accounts {
                 let account = feature_account.unwrap();
-                let feature_state: Feature = bincode::deserialize(account.data()).unwrap();
+                let feature_state: Feature = account.state().unwrap();
                 assert!(feature_state.activated_at.is_some());
             }
         }
@@ -1448,34 +1418,6 @@ mod test {
                 assert!(feature_account.is_none());
             }
         }
-    }
-
-    async fn wait_for_alpenglow_enabled(test_validator: &TestValidator) {
-        for _ in 0..240 {
-            let migration_status = test_validator
-                .bank_forks()
-                .read()
-                .unwrap()
-                .migration_status();
-            if migration_status.is_alpenglow_enabled() {
-                return;
-            }
-            sleep(Duration::from_millis(250)).await;
-        }
-        let bank_forks = test_validator.bank_forks();
-        let bank_forks = bank_forks.read().unwrap();
-        let root_bank = bank_forks.root_bank();
-        let migration_status = bank_forks.migration_status();
-        panic!(
-            "Timed out waiting for Alpenglow migration: migration_status={migration_status:?}, \
-             root_slot={}, working_slot={}, feature_activation_slot={:?}, \
-             eligible_genesis_block={:?}, genesis_certificate={:?}",
-            root_bank.slot(),
-            bank_forks.working_bank().slot(),
-            root_bank.feature_set.activated_slot(&alpenglow::id()),
-            migration_status.eligible_genesis_block(),
-            migration_status.genesis_certificate(),
-        );
     }
 
     #[test]
@@ -1495,55 +1437,21 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_all_features_active_except_alpenglow_by_default() {
+    async fn test_all_features_active_by_default() {
         let (test_validator, _payer) = TestValidatorGenesis::default_for_tests()
-            .start_async()
-            .await;
-        let rpc_client = test_validator.get_async_rpc_client();
-
-        let active_features = FEATURE_NAMES
-            .keys()
-            .copied()
-            .filter(|feature| *feature != alpenglow::id())
-            .collect::<Vec<_>>();
-        assert_feature_accounts(&rpc_client, &active_features, &[alpenglow::id()]).await;
-        assert!(
-            test_validator
-                .bank_forks()
-                .read()
-                .unwrap()
-                .migration_status()
-                .is_pre_feature_activation()
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_all_features_active_with_alpenglow_at_genesis() {
-        let (test_validator, _payer) = TestValidatorGenesis::default_for_tests()
-            .activate_alpenglow()
             .start_async()
             .await;
         let rpc_client = test_validator.get_async_rpc_client();
 
         let active_features = FEATURE_NAMES.keys().copied().collect::<Vec<_>>();
         assert_feature_accounts(&rpc_client, &active_features, &[]).await;
-        assert!(
-            test_validator
-                .bank_forks()
-                .read()
-                .unwrap()
-                .root_bank()
-                .get_alpenglow_genesis_certificate()
-                .is_some()
-        );
-        wait_for_alpenglow_enabled(&test_validator).await;
     }
 
     #[test]
     fn test_upgradeable_program_deploayment() {
         let program_id = Pubkey::new_unique();
         let (test_validator, payer) = TestValidatorGenesis::default_for_tests()
-            .add_program("../programs/bpf-loader-tests/noop", program_id)
+            .add_program("../programs/bpf_loader/test_elfs/out/noop", program_id)
             .start();
         let rpc_client = test_validator.get_rpc_client();
 
@@ -1570,7 +1478,7 @@ mod test {
     async fn test_nonblocking_upgradeable_program_deploayment() {
         let program_id = Pubkey::new_unique();
         let (test_validator, payer) = TestValidatorGenesis::default_for_tests()
-            .add_program("../programs/bpf-loader-tests/noop", program_id)
+            .add_program("../programs/bpf_loader/test_elfs/out/noop", program_id)
             .start_async()
             .await;
         let rpc_client = test_validator.get_async_rpc_client();
@@ -1609,7 +1517,6 @@ mod test {
         [
             agave_feature_set::deprecate_rewards_sysvar::id(),
             agave_feature_set::disable_fees_sysvar::id(),
-            alpenglow::id(),
             agave_feature_set::bls_pubkey_management_in_vote_account::id(),
             agave_feature_set::vote_account_initialize_v2::id(),
         ]
@@ -1643,7 +1550,7 @@ mod test {
             let active_feature_accounts = rpc_client.get_multiple_accounts(chunk).await.unwrap();
             for f in active_feature_accounts {
                 let account = f.unwrap(); // Should be `Some`.
-                let feature_state: Feature = bincode::deserialize(account.data()).unwrap();
+                let feature_state: Feature = account.state().unwrap();
                 assert!(feature_state.activated_at.is_some());
             }
         }
@@ -1683,7 +1590,7 @@ mod test {
         // The second one should be a feature account.
         let feature_account = our_accounts[1].as_ref().unwrap();
         assert_eq!(feature_account.owner, solana_sdk_ids::feature::id());
-        let feature_state: Feature = bincode::deserialize(feature_account.data()).unwrap();
+        let feature_state: Feature = feature_account.state().unwrap();
         assert!(feature_state.activated_at.is_some());
     }
 
@@ -1730,7 +1637,7 @@ mod test {
     async fn test_wait_for_program_with_unfunded_payer() {
         let program_id = Pubkey::new_unique();
         let (test_validator, _mint_keypair) = TestValidatorGenesis::default_for_tests()
-            .add_program("../programs/bpf-loader-tests/noop", program_id)
+            .add_program("../programs/bpf_loader/test_elfs/out/noop", program_id)
             .start_async()
             .await;
 
@@ -1742,12 +1649,12 @@ mod test {
             .wait_for_upgradeable_programs_deployed(&[&program_id], &unfunded_payer)
             .await;
 
-        // Verify it returns AccountNotFound error
+        // Verify it returns InvalidAccountForFee error
         let err = result.unwrap_err();
         assert!(matches!(
             *err.kind,
             solana_rpc_client_api::client_error::ErrorKind::TransactionError(
-                TransactionError::AccountNotFound
+                TransactionError::InvalidAccountForFee
             )
         ));
     }

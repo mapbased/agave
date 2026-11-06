@@ -6,7 +6,7 @@ use {
     agave_scheduler_bindings::{SharableTransactionRegion, TpuToPackMessage, tpu_message_flags},
     agave_scheduler_handshake::AgaveTpuToPackSession,
     rts_alloc::Allocator,
-    solana_packet::PacketFlags,
+    solana_perf::packet::{Meta, PacketFlags},
     std::{
         net::IpAddr,
         ptr::NonNull,
@@ -21,9 +21,7 @@ use {
 };
 
 pub struct BankingPacketReceivers {
-    pub non_vote_receiver: BankingPacketReceiver,
-    pub gossip_vote_receiver: Option<BankingPacketReceiver>,
-    pub tpu_vote_receiver: Option<BankingPacketReceiver>,
+    pub packet_receiver: BankingPacketReceiver,
 }
 
 /// Spawns a thread to receive packets from TPU and send them to the external scheduler.
@@ -51,25 +49,13 @@ fn tpu_to_pack(
     allocator: Allocator,
     mut producer: shaq::spsc::Producer<TpuToPackMessage>,
 ) {
-    // select! requires actual receivers, so in the case of None for vote receivers,
-    // we create a dummy channel that can never receive.
-    let non_vote_receiver = receivers.non_vote_receiver;
-    let gossip_vote_receiver = receivers
-        .gossip_vote_receiver
-        .unwrap_or_else(crossbeam_channel::never);
-    let tpu_vote_receiver = receivers
-        .tpu_vote_receiver
-        .unwrap_or_else(crossbeam_channel::never);
+    let packet_receiver = receivers.packet_receiver;
 
     while !exit.load(Ordering::Relaxed) {
-        let packet_batch = match crossbeam_channel::select! {
-            recv(non_vote_receiver) -> msg => msg,
-            recv(gossip_vote_receiver) -> msg => msg,
-            recv(tpu_vote_receiver) -> msg => msg,
-            default(Duration::from_secs(1)) => continue,
-        } {
+        let packet_batch = match packet_receiver.recv_timeout(Duration::from_secs(1)) {
             Ok(packet_batch) => packet_batch,
-            Err(crossbeam_channel::RecvError) => {
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                 // Senders have been dropped, signal shutdown and exit.
                 shutdown_signal.cancel();
 
@@ -133,7 +119,7 @@ fn handle_packet_batch(
 /// - `allocated_ptr` must be valid for `packet_bytes.len()` bytes.
 unsafe fn copy_packet_and_populate_message(
     packet_bytes: &[u8],
-    packet_meta: &solana_packet::Meta,
+    packet_meta: &Meta,
     allocated_ptr: NonNull<u8>,
     allocated_ptr_offset_in_allocator: usize,
 ) -> TpuToPackMessage {
@@ -171,9 +157,6 @@ unsafe fn copy_packet_and_populate_message(
 fn flags_from_meta(flags: PacketFlags) -> u8 {
     let mut tpu_message_flags = 0;
 
-    if flags.contains(PacketFlags::SIMPLE_VOTE_TX) {
-        tpu_message_flags |= tpu_message_flags::IS_SIMPLE_VOTE;
-    }
     if flags.contains(PacketFlags::FORWARDED) {
         tpu_message_flags |= tpu_message_flags::FORWARDED;
     }
@@ -199,7 +182,7 @@ mod tests {
     fn test_copy_packet_and_populate_message() {
         let packet_bytes = vec![1, 2, 3, 4, 5];
         let src_ip = Ipv4Addr::new(192, 168, 1, 1);
-        let mut packet_meta = solana_packet::Meta::default();
+        let mut packet_meta = Meta::default();
         packet_meta.size = packet_bytes.len();
         packet_meta.addr = IpAddr::V4(src_ip);
         packet_meta.port = 1;
@@ -226,9 +209,7 @@ mod tests {
         );
         assert_eq!(
             tpu_to_pack_message.flags,
-            tpu_message_flags::IS_SIMPLE_VOTE
-                | tpu_message_flags::FORWARDED
-                | tpu_message_flags::FROM_STAKED_NODE
+            tpu_message_flags::FORWARDED | tpu_message_flags::FROM_STAKED_NODE
         );
         assert_eq!(
             tpu_to_pack_message.src_addr,
@@ -243,10 +224,6 @@ mod tests {
             tpu_message_flags::NONE
         );
         assert_eq!(
-            flags_from_meta(PacketFlags::SIMPLE_VOTE_TX),
-            tpu_message_flags::IS_SIMPLE_VOTE
-        );
-        assert_eq!(
             flags_from_meta(PacketFlags::FORWARDED),
             tpu_message_flags::FORWARDED
         );
@@ -255,14 +232,8 @@ mod tests {
             tpu_message_flags::FROM_STAKED_NODE
         );
         assert_eq!(
-            flags_from_meta(
-                PacketFlags::SIMPLE_VOTE_TX
-                    | PacketFlags::FORWARDED
-                    | PacketFlags::FROM_STAKED_NODE
-            ),
-            tpu_message_flags::IS_SIMPLE_VOTE
-                | tpu_message_flags::FORWARDED
-                | tpu_message_flags::FROM_STAKED_NODE
+            flags_from_meta(PacketFlags::FORWARDED | PacketFlags::FROM_STAKED_NODE),
+            tpu_message_flags::FORWARDED | tpu_message_flags::FROM_STAKED_NODE
         );
     }
 }

@@ -4,13 +4,13 @@ use {
         block_component_processor::vote_reward::{
             CalcVoteRewardUpdateVoteStatesError, calc_vote_rewards_update_vote_states,
         },
+        installed_scheduler_pool::BankWithScheduler,
         leader_schedule_utils::leader_slot_index,
         validated_block_finalization::{
             BlockFinalizationCertError, ValidatedBlockFinalizationCert,
         },
         validated_reward_certificate::{Error as ValidatedRewardCertError, ValidatedRewardCert},
     },
-    agave_transaction_view::transaction_data::TransactionData,
     agave_votor_messages::{
         certificate::{CertSignature, Certificate, CertificateType, GenesisCert},
         consensus_message::Block,
@@ -29,7 +29,10 @@ use {
         entry::EntryView,
     },
     solana_hash::Hash,
+    solana_measure::measure_us,
     solana_pubkey::Pubkey,
+    solana_svm_timings::ExecuteTimings,
+    solana_transaction_error::TransactionError,
     std::{collections::HashSet, sync::Arc},
     thiserror::Error,
 };
@@ -99,6 +102,8 @@ pub enum BlockComponentProcessorError {
     InvalidRewardCerts(#[from] ValidatedRewardCertError),
     #[error("updating bank footer failed with \"{0}\"")]
     UpdateBankFooter(#[from] BankFooterError),
+    #[error("transaction execution failed with \"{0}\"")]
+    TransactionExecution(#[from] TransactionError),
 }
 
 impl BlockComponentProcessorError {
@@ -126,7 +131,8 @@ impl BlockComponentProcessorError {
             | BlockComponentProcessorError::AbandonedBank(_)
             | BlockComponentProcessorError::InvalidRewardCerts(_)
             | BlockComponentProcessorError::UpdateBankFooter(_)
-            | BlockComponentProcessorError::InvalidFinalizationCertificate(_) => true,
+            | BlockComponentProcessorError::InvalidFinalizationCertificate(_)
+            | BlockComponentProcessorError::TransactionExecution(_) => true,
             BlockComponentProcessorError::BlockComponentPreMigration
             | BlockComponentProcessorError::MissingBlockFooter
             | BlockComponentProcessorError::MissingGenesisCertificateMarker
@@ -366,7 +372,7 @@ impl BlockComponentProcessor {
     /// Validates that a parent marker (header or update parent) has been processed
     /// before any entry batches. The terminal Alpenglow tick is the only entry
     /// batch allowed after the block footer.
-    pub fn on_entry_batch<D: TransactionData>(
+    pub fn on_entry_batch<D: AsRef<[u8]>>(
         &mut self,
         migration_status: &MigrationStatus,
         slot: Slot,
@@ -398,13 +404,14 @@ impl BlockComponentProcessor {
     /// - Once the migration is complete all markers are allowed
     pub fn on_marker(
         &mut self,
-        bank: Arc<Bank>,
+        bank: &BankWithScheduler,
         parent_bank: Arc<Bank>,
         shred_version: u16,
         marker: VersionedBlockMarker,
         allow_initial_update_parent: bool,
         finalization_cert_sender: Option<&Sender<SmallVec<[Certificate; 2]>>>,
         migration_status: &MigrationStatus,
+        execute_timings: &mut ExecuteTimings,
     ) -> Result<(), BlockComponentProcessorError> {
         let slot = bank.slot();
         let VersionedBlockMarker::V1(marker) = marker;
@@ -425,7 +432,7 @@ impl BlockComponentProcessor {
                 if markers_fully_enabled || in_migration =>
             {
                 self.on_genesis_cert_block_marker(
-                    bank,
+                    bank.clone_without_scheduler(),
                     shred_version,
                     genesis_cert_block_marker.into_inner(),
                     migration_status,
@@ -440,6 +447,7 @@ impl BlockComponentProcessor {
                 shred_version,
                 footer.into_inner(),
                 finalization_cert_sender,
+                execute_timings,
             ),
 
             BlockMarkerV1::UpdateParent(update_parent) if markers_fully_enabled => {
@@ -570,13 +578,14 @@ impl BlockComponentProcessor {
             bitmap: cert.signature.bitmap.clone(),
             shred_version,
         };
-        bank.verify_certificate(unverified_cert).map_err(|_| {
-            warn!(
-                "Failed to verify genesis certificate for slot {cert_slot} in bank slot {}",
-                bank.slot()
-            );
-            BlockComponentProcessorError::GenesisCertificateFailedVerification
-        })?;
+        bank.verify_certificate(unverified_cert, None)
+            .map_err(|_| {
+                warn!(
+                    "Failed to verify genesis certificate for slot {cert_slot} in bank slot {}",
+                    bank.slot()
+                );
+                BlockComponentProcessorError::GenesisCertificateFailedVerification
+            })?;
 
         Ok(())
     }
@@ -584,17 +593,18 @@ impl BlockComponentProcessor {
     fn on_footer(
         &mut self,
         my_pubkey: &Pubkey,
-        bank: Arc<Bank>,
+        bank: &BankWithScheduler,
         parent_bank: Arc<Bank>,
         shred_version: u16,
         footer: VersionedBlockFooter,
         finalization_cert_sender: Option<&Sender<SmallVec<[Certificate; 2]>>>,
+        execute_timings: &mut ExecuteTimings,
     ) -> Result<(), BlockComponentProcessorError> {
         self.stage.on_footer()?;
 
         let VersionedBlockFooter::V1(footer) = footer;
 
-        Self::enforce_nanosecond_clock_bounds(&bank, &parent_bank, &footer)?;
+        Self::enforce_nanosecond_clock_bounds(bank, &parent_bank, &footer)?;
 
         let BlockFooterV1 {
             bank_hash,
@@ -606,7 +616,7 @@ impl BlockComponentProcessor {
         } = footer;
 
         let reward_cert = ValidatedRewardCert::try_new(
-            &bank,
+            bank,
             shred_version,
             &skip_reward_cert,
             &notar_reward_cert,
@@ -615,7 +625,7 @@ impl BlockComponentProcessor {
             Self::block_producer_time_nanos_as_i64(block_producer_time_nanos)?;
         let final_cert = block_final_cert
             .map(|final_cert| {
-                ValidatedBlockFinalizationCert::try_from_footer(final_cert, &bank, shred_version)
+                ValidatedBlockFinalizationCert::try_from_footer(final_cert, bank, shred_version)
                     .map_err(BlockComponentProcessorError::InvalidFinalizationCertificate)
             })
             .transpose()?;
@@ -632,8 +642,14 @@ impl BlockComponentProcessor {
             }
         };
 
-        Self::update_bank_with_footer_fields(
-            &bank,
+        // We need to wait for any in progress execution before modifying account state
+        if let Some((result, execute_time)) = bank.wait_for_completed_scheduler() {
+            execute_timings.accumulate(&execute_time);
+            result?;
+        }
+
+        let _ = Self::update_bank_with_footer_fields(
+            bank,
             block_producer_time_nanos,
             Some(bank_hash),
             reward_cert,
@@ -770,21 +786,29 @@ impl BlockComponentProcessor {
         bank_hash: Option<Hash>,
         reward_cert: Option<ValidatedRewardCert>,
         final_cert_input: Option<(&HashSet<Pubkey>, Slot)>,
-    ) -> Result<(), BankFooterError> {
+    ) -> Result<VoteAccountUpdateStats, BankFooterError> {
         bank.update_clock_from_footer(block_producer_time_nanos);
-        calc_vote_rewards_update_vote_states(
+        let (vote_accounts_updated, update_us) = measure_us!(calc_vote_rewards_update_vote_states(
             bank,
             reward_cert,
             final_cert_input,
             block_producer_time_nanos,
-        )?;
+        )?);
 
         if let Some(hash) = bank_hash {
             // Record expected bank hash from footer for later verification when the bank is frozen.
             bank.set_expected_bank_hash(hash);
         }
-        Ok(())
+        Ok(VoteAccountUpdateStats {
+            update_us,
+            vote_accounts_updated,
+        })
     }
+}
+
+pub struct VoteAccountUpdateStats {
+    pub update_us: u64,
+    pub vote_accounts_updated: usize,
 }
 
 #[cfg(test)]
@@ -794,8 +818,9 @@ mod tests {
         crate::{
             bank::{Bank, SlotLeader},
             bank_forks::BankForks,
-            genesis_utils::{activate_all_features_alpenglow, create_genesis_config},
+            genesis_utils::{create_genesis_config, create_genesis_config_with_tower_leader},
         },
+        agave_votor_messages::consensus_message::BlockId,
         bytes::Bytes,
         rand::Rng,
         solana_bls_signatures::{BLS_SIGNATURE_AFFINE_SIZE, Signature as BLSSignature},
@@ -819,9 +844,9 @@ mod tests {
         Bank::new_with_bank_forks_for_tests(&genesis_config_info.genesis_config)
     }
 
-    fn create_test_bank_alpenglow() -> (Arc<Bank>, Arc<RwLock<BankForks>>) {
-        let mut genesis_config_info = create_genesis_config(10_000);
-        activate_all_features_alpenglow(&mut genesis_config_info.genesis_config);
+    fn create_test_bank_tower() -> (Arc<Bank>, Arc<RwLock<BankForks>>) {
+        let genesis_config_info =
+            create_genesis_config_with_tower_leader(10_000, &Pubkey::new_unique(), 0);
         Bank::new_with_bank_forks_for_tests(&genesis_config_info.genesis_config)
     }
 
@@ -841,7 +866,7 @@ mod tests {
     fn test_genesis_cert_marker() -> GenesisCertBlockMarker {
         GenesisCertBlockMarker {
             slot: 0,
-            block_id: Hash::default(),
+            block_id: BlockId::default(),
             bls_signature: BLSSignature([0; BLS_SIGNATURE_AFFINE_SIZE]),
             bitmap: vec![],
         }
@@ -896,9 +921,9 @@ mod tests {
     #[test]
     fn test_first_alpenglow_block_with_genesis_certificate_marker_succeeds() {
         let migration_status = post_migration_status_with_genesis_slot(1);
-        let (genesis_bank, bank_forks) = create_test_bank();
+        let (genesis_bank, bank_forks) = create_test_bank_tower();
         let parent = create_child_bank(&bank_forks, &genesis_bank, 1);
-        let parent_block_id = Hash::new_unique();
+        let parent_block_id = BlockId::new_unique();
         parent.set_block_id(Some(parent_block_id));
         let bank = create_child_bank(&bank_forks, &parent, 2);
         let genesis_marker = GenesisCertBlockMarker {
@@ -923,9 +948,9 @@ mod tests {
     fn test_genesis_certificate_marker_aborts_tower_bank_during_migration() {
         let migration_status = MigrationStatus::default();
         migration_status.record_feature_activation(0);
-        let (genesis_bank, bank_forks) = create_test_bank();
+        let (genesis_bank, bank_forks) = create_test_bank_tower();
         let parent = create_child_bank(&bank_forks, &genesis_bank, 1);
-        let parent_block_id = Hash::new_unique();
+        let parent_block_id = BlockId::new_unique();
         parent.set_block_id(Some(parent_block_id));
         let bank = create_child_bank(&bank_forks, &parent, 2);
         let genesis_marker = GenesisCertBlockMarker {
@@ -975,15 +1000,16 @@ mod tests {
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-
+        let bank_with_scheduler = BankWithScheduler::new_without_scheduler(bank.clone());
         processor
             .on_footer(
                 &my_pubkey,
-                bank.clone(),
+                &bank_with_scheduler,
                 parent,
                 shred_version,
                 footer,
                 None,
+                &mut ExecuteTimings::default(),
             )
             .unwrap();
 
@@ -1043,15 +1069,16 @@ mod tests {
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-
+        let bank_with_scheduler = BankWithScheduler::new_without_scheduler(bank.clone());
         processor
             .on_footer(
                 &my_pubkey,
-                bank.clone(),
+                &bank_with_scheduler,
                 parent,
                 shred_version,
                 footer,
                 None,
+                &mut ExecuteTimings::default(),
             )
             .unwrap();
 
@@ -1083,7 +1110,7 @@ mod tests {
         let mut processor = processor_after_header();
         let shred_version = rand::rng().random();
 
-        let (parent, bank_forks) = create_test_bank_alpenglow();
+        let (parent, bank_forks) = create_test_bank();
         let parent_time_nanos = parent.clock().unix_timestamp.saturating_mul(1_000_000_000);
 
         // Set up clock on parent so validation doesn't skip bounds checking
@@ -1107,8 +1134,16 @@ mod tests {
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-
-        let result = processor.on_footer(&my_pubkey, bank, parent, shred_version, footer, None);
+        let bank = BankWithScheduler::new_without_scheduler(bank);
+        let result = processor.on_footer(
+            &my_pubkey,
+            &bank,
+            parent,
+            shred_version,
+            footer,
+            None,
+            &mut ExecuteTimings::default(),
+        );
         if should_pass {
             result.unwrap();
         } else {
@@ -1125,7 +1160,7 @@ mod tests {
         let mut processor = processor_after_header();
         let shred_version = rand::rng().random();
 
-        let (parent, bank_forks) = create_test_bank_alpenglow();
+        let (parent, bank_forks) = create_test_bank();
         assert_eq!(parent.get_nanosecond_clock(), None);
 
         let bank = create_child_bank(&bank_forks, &parent, 1);
@@ -1145,10 +1180,18 @@ mod tests {
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-
+        let bank = BankWithScheduler::new_without_scheduler(bank);
         assert!(matches!(
             processor
-                .on_footer(&my_pubkey, bank, parent, shred_version, footer, None)
+                .on_footer(
+                    &my_pubkey,
+                    &bank,
+                    parent,
+                    shred_version,
+                    footer,
+                    None,
+                    &mut ExecuteTimings::default(),
+                )
                 .unwrap_err(),
             BlockComponentProcessorError::NanosecondClockOutOfBounds
         ));
@@ -1160,7 +1203,7 @@ mod tests {
         let mut processor = processor_after_header();
         let shred_version = rand::rng().random();
 
-        let (parent, bank_forks) = create_test_bank_alpenglow();
+        let (parent, bank_forks) = create_test_bank();
         let parent_time_nanos = parent.clock().unix_timestamp.saturating_mul(1_000_000_000);
         parent.update_clock_from_footer(parent_time_nanos);
         let bank = create_child_bank(&bank_forks, &parent, 1);
@@ -1173,10 +1216,18 @@ mod tests {
             skip_reward_cert: None,
             notar_reward_cert: None,
         });
-
+        let bank = BankWithScheduler::new_without_scheduler(bank);
         assert!(matches!(
             processor
-                .on_footer(&my_pubkey, bank, parent, shred_version, footer, None)
+                .on_footer(
+                    &my_pubkey,
+                    &bank,
+                    parent,
+                    shred_version,
+                    footer,
+                    None,
+                    &mut ExecuteTimings::default(),
+                )
                 .unwrap_err(),
             BlockComponentProcessorError::NanosecondClockOutOfBounds
         ));
@@ -1279,14 +1330,16 @@ mod tests {
             move |marker: VersionedBlockMarker, allow_initial_update_parent: bool| -> Step {
                 let (bank, parent) = (bank.clone(), parent.clone());
                 Box::new(move |processor, migration_status| {
+                    let bank = BankWithScheduler::new_without_scheduler(bank);
                     processor.on_marker(
-                        bank,
+                        &bank,
                         parent,
                         shred_version,
                         marker,
                         allow_initial_update_parent,
                         None,
                         migration_status,
+                        &mut ExecuteTimings::default(),
                     )
                 })
             }
@@ -1303,7 +1356,7 @@ mod tests {
             marker_step(
                 VersionedBlockMarker::from_block_header(BlockHeaderV1 {
                     parent_slot,
-                    parent_block_id: Hash::default(),
+                    parent_block_id: BlockId::default(),
                 }),
                 false,
             )
@@ -1319,7 +1372,7 @@ mod tests {
             marker_step(
                 VersionedBlockMarker::from_update_parent(UpdateParentV1 {
                     new_parent_slot: 0,
-                    new_parent_block_id: Hash::default(),
+                    new_parent_block_id: BlockId::default(),
                 }),
                 allow_initial_update_parent,
             )
@@ -1331,17 +1384,19 @@ mod tests {
             move |allow_initial_update_parent: bool| -> Step {
                 let (bank, parent) = (bank.clone(), parent.clone());
                 Box::new(move |processor, migration_status| {
+                    let bank = BankWithScheduler::new_without_scheduler(bank);
                     processor.on_marker(
-                        bank,
+                        &bank,
                         parent,
                         shred_version,
                         VersionedBlockMarker::from_update_parent(UpdateParentV1 {
                             new_parent_slot: 0,
-                            new_parent_block_id: Hash::default(),
+                            new_parent_block_id: BlockId::default(),
                         }),
                         allow_initial_update_parent,
                         None,
                         migration_status,
+                        &mut ExecuteTimings::default(),
                     )
                 })
             }
@@ -1397,7 +1452,7 @@ mod tests {
         let abandoned = || {
             E::AbandonedBank(VersionedUpdateParent::V1(UpdateParentV1 {
                 new_parent_slot: 0,
-                new_parent_block_id: Hash::default(),
+                new_parent_block_id: BlockId::default(),
             }))
         };
 
@@ -1548,7 +1603,7 @@ mod tests {
 
         let update_parent_marker = VersionedUpdateParent::V1(UpdateParentV1 {
             new_parent_slot: 0,
-            new_parent_block_id: Hash::default(),
+            new_parent_block_id: BlockId::default(),
         });
         let abandoned =
             || BlockComponentProcessorError::AbandonedBank(update_parent_marker.clone());

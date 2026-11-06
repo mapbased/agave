@@ -1,4 +1,5 @@
 use {
+    agave_event_system::stream_policy::StreamPolicy,
     agave_votor::{
         event::VotorEvent, vote_history::VoteHistory, vote_history_storage::VoteHistoryStorage,
     },
@@ -18,7 +19,6 @@ use {
             BankingControlMsg, BankingStage,
             transaction_scheduler::scheduler_controller::SchedulerConfig,
         },
-        consensus::{Tower, tower_storage::TowerStorage},
         repair::repair_service,
         validator::{
             BlockProductionMethod, SchedulerPacing, TransactionStructure, ValidatorStartProgress,
@@ -58,7 +58,6 @@ pub struct AdminRpcRequestMetadata {
     pub validator_exit: Arc<RwLock<Exit>>,
     pub validator_exit_backpressure: HashMap<String, Arc<AtomicBool>>,
     pub authorized_voter_keypairs: Arc<RwLock<Vec<Arc<Keypair>>>>,
-    pub tower_storage: Arc<dyn TowerStorage>,
     pub vote_history_storage: Arc<dyn VoteHistoryStorage>,
     pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     pub post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
@@ -100,12 +99,15 @@ pub struct AdminRpcContactInfo {
     pub tpu: SocketAddr,
     pub tpu_quic: Option<SocketAddr>,
     pub tpu_forwards: SocketAddr,
+    /// Retained for compatibility with the legacy admin RPC contact-info schema.
     pub tpu_vote: SocketAddr,
     pub rpc: SocketAddr,
     pub rpc_pubsub: SocketAddr,
     pub serve_repair: SocketAddr,
     pub last_updated_timestamp: u64,
     pub shred_version: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -148,6 +150,7 @@ impl From<ContactInfo> for AdminRpcContactInfo {
             rpc_pubsub: unwrap_socket!(rpc_pubsub),
             serve_repair: unwrap_socket!(serve_repair, Protocol::UDP),
             shred_version: node.shred_version(),
+            version: Some(node.version().as_detailed_string()),
         }
     }
 }
@@ -217,6 +220,9 @@ pub trait AdminRpc {
     #[rpc(name = "setLogFilter")]
     fn set_log_filter(&self, filter: String) -> Result<()>;
 
+    #[rpc(meta, name = "setEventFilter")]
+    fn set_event_filter(&self, meta: Self::Metadata, filter: String) -> Result<()>;
+
     #[rpc(meta, name = "startTime")]
     fn start_time(&self, meta: Self::Metadata) -> Result<SystemTime>;
 
@@ -267,7 +273,7 @@ pub trait AdminRpc {
     fn repair_shred_from_peer(
         &self,
         meta: Self::Metadata,
-        pubkey: Option<Pubkey>,
+        pubkey: Pubkey,
         slot: u64,
         shred_index: u64,
     ) -> Result<()>;
@@ -363,8 +369,23 @@ impl AdminRpc for AdminRpcImpl {
                     thread::sleep(Duration::from_millis(100));
                 }
 
-                info!("validator exit requested");
+                info!("Validator exit requested");
                 meta.validator_exit.write().unwrap().exit();
+
+                // `post_init` holds references to state that is referenced by
+                // other validator threads. To enable graceful shutdown,
+                // `drop()` those additional references now.
+                let post_init = meta.post_init.write().unwrap().take();
+                // But `BankForks` must be handled specially. `BankForks` holds
+                // banks which hold an `Arc<Accounts>`. Depending on factors
+                // such as cluster state, AccountsDb may take a while to
+                // `drop()`. So, grab and hold a `BankForks` reference in this
+                // thread to ensure other validator threads do not hold the
+                // final reference and thus get stuck performing the `drop()`.
+                let _bank_forks = post_init
+                    .as_ref()
+                    .map(|post_init| post_init.bank_forks.clone());
+                drop(post_init);
 
                 if !meta.validator_exit_backpressure.is_empty() {
                     let service_names = meta.validator_exit_backpressure.keys();
@@ -390,17 +411,19 @@ impl AdminRpc for AdminRpcImpl {
                     info!("All services have completed");
                 }
 
-                // TODO: Debug why Exit doesn't always cause the validator to fully exit
-                // (rocksdb background processing or some other stuck thread perhaps?).
+                // The main thread should exit before `sleep()` elapses, and the
+                // main thread exiting causes termination of the entire process.
                 //
-                // If the process is still alive after five seconds, exit harder
+                // Exit after the `sleep()` just incase the process is still
+                // alive
+                const DEFAULT_EXIT_TIMEOUT_SECS: u64 = 5;
                 thread::sleep(Duration::from_secs(
                     env::var("SOLANA_VALIDATOR_EXIT_TIMEOUT")
                         .ok()
                         .and_then(|x| x.parse().ok())
-                        .unwrap_or(5),
+                        .unwrap_or(DEFAULT_EXIT_TIMEOUT_SECS),
                 ));
-                warn!("validator exit timeout");
+                error!("Validator exit timed out");
                 std::process::exit(0);
             })
             .unwrap();
@@ -538,6 +561,16 @@ impl AdminRpc for AdminRpcImpl {
         Ok(())
     }
 
+    fn set_event_filter(&self, meta: Self::Metadata, filter: String) -> Result<()> {
+        let stream_policy = filter
+            .parse::<StreamPolicy>()
+            .map_err(|err| jsonrpc_core::Error::invalid_params(err.to_string()))?;
+        meta.with_post_init(|post_init| {
+            post_init.event_system.set_stream_policy(stream_policy);
+            Ok(())
+        })
+    }
+
     fn start_time(&self, meta: Self::Metadata) -> Result<SystemTime> {
         debug!("start_time admin rpc request received");
         Ok(meta.start_time)
@@ -583,7 +616,7 @@ impl AdminRpc for AdminRpcImpl {
         &self,
         meta: Self::Metadata,
         keypair_file: String,
-        require_tower: bool,
+        _require_tower: bool,
         require_vote_history: bool,
     ) -> Result<()> {
         debug!("set_identity request received");
@@ -594,19 +627,14 @@ impl AdminRpc for AdminRpcImpl {
             ))
         })?;
 
-        AdminRpcImpl::set_identity_keypair(
-            meta,
-            identity_keypair,
-            require_tower,
-            require_vote_history,
-        )
+        AdminRpcImpl::set_identity_keypair(meta, identity_keypair, require_vote_history)
     }
 
     fn set_identity_from_bytes(
         &self,
         meta: Self::Metadata,
         identity_keypair: Vec<u8>,
-        require_tower: bool,
+        _require_tower: bool,
         require_vote_history: bool,
     ) -> Result<()> {
         debug!("set_identity_from_bytes request received");
@@ -617,12 +645,7 @@ impl AdminRpc for AdminRpcImpl {
             ))
         })?;
 
-        AdminRpcImpl::set_identity_keypair(
-            meta,
-            identity_keypair,
-            require_tower,
-            require_vote_history,
-        )
+        AdminRpcImpl::set_identity_keypair(meta, identity_keypair, require_vote_history)
     }
 
     fn set_staked_nodes_overrides(&self, meta: Self::Metadata, path: String) -> Result<()> {
@@ -697,23 +720,28 @@ impl AdminRpc for AdminRpcImpl {
     fn repair_shred_from_peer(
         &self,
         meta: Self::Metadata,
-        pubkey: Option<Pubkey>,
+        pubkey: Pubkey,
         slot: u64,
         shred_index: u64,
     ) -> Result<()> {
         debug!("repair_shred_from_peer request received");
 
         meta.with_post_init(|post_init| {
-            repair_service::RepairService::request_repair_for_shred_from_peer(
+            let sent = repair_service::RepairService::request_repair_for_shred_from_peer(
                 post_init.cluster_info.clone(),
-                post_init.cluster_slots.clone(),
                 pubkey,
                 slot,
                 shred_index,
                 &post_init.repair_socket,
                 post_init.outstanding_repair_requests.clone(),
             );
-            Ok(())
+            if sent {
+                Ok(())
+            } else {
+                Err(jsonrpc_core::error::Error::invalid_params(format!(
+                    "No valid repair socket found for {pubkey}"
+                )))
+            }
         })
     }
 
@@ -945,7 +973,6 @@ impl AdminRpcImpl {
     fn set_identity_keypair(
         meta: AdminRpcRequestMetadata,
         identity_keypair: Keypair,
-        require_tower: bool,
         require_vote_history: bool,
     ) -> Result<()> {
         meta.with_post_init(|post_init| {
@@ -966,17 +993,6 @@ impl AdminRpcImpl {
                          {new_identity} is not supported"
                     )));
                 }
-            }
-
-            if require_tower {
-                let _ = Tower::restore(meta.tower_storage.as_ref(), &identity_keypair.pubkey())
-                    .map_err(|err| {
-                        jsonrpc_core::error::Error::invalid_params(format!(
-                            "Unable to load tower file for identity {}: {}",
-                            identity_keypair.pubkey(),
-                            err
-                        ))
-                    })?;
             }
 
             if require_vote_history {
@@ -1184,7 +1200,6 @@ mod tests {
         super::*,
         agave_snapshots::snapshot_config::SnapshotConfig,
         agave_votor::event::VotorEventSender,
-        assert_matches::assert_matches,
         crossbeam_channel::bounded,
         serde_json::Value,
         solana_accounts_db::{
@@ -1193,7 +1208,6 @@ mod tests {
         },
         solana_core::{
             admin_rpc_post_init::{KeyUpdaterType, KeyUpdaters},
-            consensus::tower_storage::NullTowerStorage,
             validator::{Validator, ValidatorConfig, ValidatorTpuConfig},
         },
         solana_gossip::{cluster_info::ClusterInfo, node::Node},
@@ -1212,7 +1226,7 @@ mod tests {
             bank_forks::BankForks,
             genesis_utils::{ValidatorVoteKeypairs, create_genesis_config_with_vote_accounts},
         },
-        std::{collections::HashSet, fs::remove_dir_all, sync::atomic::AtomicBool},
+        std::{assert_matches, collections::HashSet, fs::remove_dir_all, sync::atomic::AtomicBool},
         tokio::sync::mpsc,
     };
 
@@ -1276,11 +1290,11 @@ mod tests {
                 validator_exit,
                 validator_exit_backpressure: HashMap::default(),
                 authorized_voter_keypairs: Arc::new(RwLock::new(vec![vote_keypair])),
-                tower_storage: Arc::new(NullTowerStorage {}),
                 vote_history_storage: Arc::new(
                     agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
                 ),
                 post_init: Arc::new(RwLock::new(Some(AdminRpcRequestMetadataPostInit {
+                    event_system: agave_event_system::EventSystem::stub(),
                     cluster_info,
                     bank_forks,
                     vote_account,
@@ -1290,9 +1304,6 @@ mod tests {
                     outstanding_repair_requests: Arc::<
                         RwLock<repair_service::OutstandingShredRepairs>,
                     >::default(),
-                    cluster_slots: Arc::new(
-                        solana_core::cluster_slots_service::cluster_slots::ClusterSlots::default_for_tests(),
-                    ),
                     node: None,
                     banking_control_sender: mpsc::channel(1).0,
                     snapshot_controller,
@@ -1398,7 +1409,6 @@ mod tests {
                 rpc.meta.clone(),
                 validators[1].node_keypair.insecure_clone(),
                 false,
-                false,
             ),
             Err(jsonrpc_core::Error {
                 code: ErrorCode::InvalidParams,
@@ -1493,7 +1503,6 @@ mod tests {
                 validator_exit: validator_config.validator_exit.clone(),
                 validator_exit_backpressure: HashMap::default(),
                 authorized_voter_keypairs: authorized_voter_keypairs.clone(),
-                tower_storage: Arc::new(NullTowerStorage {}),
                 vote_history_storage: Arc::new(
                     agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
                 ),
@@ -1534,7 +1543,6 @@ mod tests {
                 HashSet::from_iter(vec![
                     KeyUpdaterType::Tpu,
                     KeyUpdaterType::TpuForwards,
-                    KeyUpdaterType::TpuVote,
                     KeyUpdaterType::Forward,
                     KeyUpdaterType::RpcService,
                     KeyUpdaterType::Votor,
@@ -1581,7 +1589,6 @@ mod tests {
             validator_exit,
             validator_exit_backpressure: HashMap::default(),
             authorized_voter_keypairs: authorized_voter_keypairs.clone(),
-            tower_storage: Arc::new(NullTowerStorage {}),
             vote_history_storage: Arc::new(
                 agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
             ),
@@ -1677,7 +1684,6 @@ mod tests {
             validator_exit,
             validator_exit_backpressure: HashMap::default(),
             authorized_voter_keypairs,
-            tower_storage: Arc::new(NullTowerStorage {}),
             vote_history_storage: Arc::new(
                 agave_votor::vote_history_storage::NullVoteHistoryStorage::default(),
             ),

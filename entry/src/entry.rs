@@ -4,9 +4,7 @@
 //! represents an approximate amount of time since the last Entry was created.
 use {
     crate::poh::Poh,
-    agave_transaction_view::{
-        transaction_data::TransactionData, transaction_view::UnsanitizedTransactionView,
-    },
+    agave_transaction_view::transaction_view::UnsanitizedTransactionView,
     crossbeam_channel::{Receiver, Sender},
     log::*,
     rayon::{ThreadPool, prelude::*},
@@ -60,7 +58,7 @@ pub struct Entry {
 }
 
 #[derive(Clone)]
-pub struct EntryView<D: TransactionData> {
+pub struct EntryView<D: AsRef<[u8]>> {
     /// The number of hashes since the previous Entry ID.
     pub num_hashes: u64,
 
@@ -77,7 +75,7 @@ pub struct EntryView<D: TransactionData> {
 #[cfg(feature = "dev-context-only-utils")]
 impl<D> PartialEq for EntryView<D>
 where
-    D: PartialEq + TransactionData,
+    D: PartialEq + AsRef<[u8]>,
 {
     fn eq(&self, other: &Self) -> bool {
         let same_num_hashes = self.num_hashes == other.num_hashes;
@@ -101,7 +99,7 @@ where
 
 impl<D> std::fmt::Debug for EntryView<D>
 where
-    D: TransactionData,
+    D: AsRef<[u8]>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EntryView")
@@ -112,7 +110,7 @@ where
     }
 }
 
-impl<D: TransactionData> EntryView<D> {
+impl<D: AsRef<[u8]>> EntryView<D> {
     pub fn is_tick(&self) -> bool {
         self.transactions.is_empty()
     }
@@ -157,7 +155,7 @@ impl From<&Entry> for EntryVerificationData {
     }
 }
 
-impl<D: TransactionData> From<&EntryView<D>> for EntryVerificationData {
+impl<D: AsRef<[u8]>> From<&EntryView<D>> for EntryVerificationData {
     fn from(entry: &EntryView<D>) -> Self {
         Self {
             num_hashes: entry.num_hashes,
@@ -195,7 +193,7 @@ pub fn entries_to_verification_data(entries: &[Entry]) -> Vec<EntryVerificationD
     entries.iter().map(Into::into).collect()
 }
 
-pub fn entry_views_to_verification_data<D: TransactionData>(
+pub fn entry_views_to_verification_data<D: AsRef<[u8]>>(
     entries: &[EntryView<D>],
 ) -> Vec<EntryVerificationData> {
     entries.iter().map(Into::into).collect()
@@ -217,7 +215,7 @@ impl From<&Entry> for EntrySummary {
     }
 }
 
-impl<D: TransactionData> From<&EntryView<D>> for EntrySummary {
+impl<D: AsRef<[u8]>> From<&EntryView<D>> for EntrySummary {
     fn from(entry: &EntryView<D>) -> Self {
         Self {
             num_hashes: entry.num_hashes,
@@ -234,21 +232,19 @@ pub enum EntryType<Tx: TransactionWithMeta> {
 }
 
 #[derive(Debug)]
-struct TxVerificationData<D: TransactionData> {
-    is_simple_vote: bool,
+struct TxVerificationData<D: AsRef<[u8]>> {
     signatures: SmallVec<[Signature; 2]>,
     signer_pubkeys: SmallVec<[Address; 2]>,
-    message_hash: Hash,
     transaction_view: UnsanitizedTransactionView<D>,
 }
 
-pub struct UnverifiedSignatures<D: TransactionData> {
+pub struct UnverifiedSignatures<D: AsRef<[u8]>> {
     signatures: Vec<TxVerificationData<D>>,
 }
 
 impl<D> UnverifiedSignatures<D>
 where
-    D: TransactionData + Send + Sync,
+    D: AsRef<[u8]> + Send + Sync,
 {
     fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -318,27 +314,9 @@ where
             .zip(&tx_data.signer_pubkeys)
             .all(|(signature, pubkey)| signature.verify(pubkey.as_ref(), message))
     }
-
-    pub fn vote_transaction_message_hash(&self, index: usize) -> Option<Hash> {
-        let tx_data = &self.signatures[index];
-        (tx_data.is_simple_vote && !tx_data.signatures.is_empty()).then_some(tx_data.message_hash)
-    }
-
-    pub fn vote_transaction_message_hashes(&self) -> Vec<Hash> {
-        self.signatures
-            .iter()
-            .filter(|tx_signatures| tx_signatures.is_simple_vote)
-            .filter_map(|tx_signatures| {
-                tx_signatures
-                    .signatures
-                    .first()
-                    .map(|_| tx_signatures.message_hash)
-            })
-            .collect()
-    }
 }
 
-pub struct ValidatedHashedTransactions<Tx: TransactionWithMeta, D: TransactionData> {
+pub struct ValidatedHashedTransactions<Tx: TransactionWithMeta, D: AsRef<[u8]>> {
     pub entries: Vec<EntryType<Tx>>,
     pub unverified_signatures: UnverifiedSignatures<D>,
 }
@@ -467,7 +445,7 @@ fn validate_and_hash_entry_transactions<Tx: TransactionWithMeta, F, D>(
 ) -> Result<EntryType<Tx>>
 where
     F: Fn(UnsanitizedTransactionView<D>) -> Result<Tx>,
-    D: TransactionData + Clone,
+    D: AsRef<[u8]> + Clone,
 {
     if entry.transactions.is_empty() {
         return Ok(EntryType::Tick(entry.hash));
@@ -485,11 +463,8 @@ where
             let signatures = transaction_view.signatures().iter().copied().collect();
             let signer_pubkeys = static_account_keys[..num_signers].iter().copied().collect();
             let verified_transaction = verify(transaction_view.clone())?;
-            let message_hash = *verified_transaction.message_hash();
             unverified_signatures.signatures.push(TxVerificationData {
-                is_simple_vote: verified_transaction.is_simple_vote_transaction(),
                 signatures,
-                message_hash,
                 transaction_view,
                 signer_pubkeys,
             });
@@ -513,7 +488,7 @@ pub fn validate_and_hash_transactions<Tx, F, D>(
 where
     Tx: TransactionWithMeta + Send + Sync,
     F: Fn(UnsanitizedTransactionView<D>) -> Result<Tx> + Send + Sync,
-    D: TransactionData + Clone + Send + Sync,
+    D: AsRef<[u8]> + Clone + Send + Sync,
 {
     const PARALLEL_VERIFY_THRESHOLD: usize = 200;
     if num_txs < PARALLEL_VERIFY_THRESHOLD {
@@ -669,7 +644,7 @@ pub trait EntrySliceTickCheck {
     fn tick_count(&self) -> u64;
 }
 
-impl<D: TransactionData> EntrySliceTickCheck for [EntryView<D>] {
+impl<D: AsRef<[u8]>> EntrySliceTickCheck for [EntryView<D>] {
     fn verify_tick_hash_count(&self, tick_hash_count: &mut u64, hashes_per_tick: u64) -> bool {
         // When hashes_per_tick is 0, hashing is disabled.
         if hashes_per_tick == 0 {
@@ -771,10 +746,7 @@ mod tests {
         },
         solana_perf::test_tx::test_tx,
         solana_pubkey::Pubkey,
-        solana_runtime_transaction::{
-            runtime_transaction::{ReplayTransaction, RuntimeTransaction},
-            sanitize_config::sanitize_config,
-        },
+        solana_runtime_transaction::runtime_transaction::{ReplayTransaction, RuntimeTransaction},
         solana_sha256_hasher::hash,
         solana_signature::Signature,
         solana_signer::Signer,
@@ -870,7 +842,7 @@ mod tests {
         let verify_transaction = {
             move |unsanitized: UnsanitizedTransactionView<Bytes>| -> Result<ReplayTransaction> {
                 let sanitized = unsanitized
-                    .sanitize(&sanitize_config())
+                    .sanitize()
                     .map_err(|_| TransactionError::SanitizeFailure)?;
                 let statically_loaded =
                     RuntimeTransaction::<SanitizedTransactionView<Bytes>>::try_new(
@@ -905,7 +877,7 @@ mod tests {
         let validate_and_hash_transaction =
             move |unsanitized: UnsanitizedTransactionView<Bytes>| -> Result<ReplayTransaction> {
                 let sanitized = unsanitized
-                    .sanitize(&sanitize_config())
+                    .sanitize()
                     .map_err(|_| TransactionError::SanitizeFailure)?;
                 let statically_loaded =
                     RuntimeTransaction::<SanitizedTransactionView<Bytes>>::try_new(

@@ -5,12 +5,10 @@ use {
     solana_measure::measure_us,
     solana_runtime::{
         bank::{Bank, ProcessedTransactionCounts},
-        bank_utils,
         prioritization_fee_cache::PrioritizationFeeCache,
         transaction_balances::compile_collected_balances,
         transaction_batch::TransactionBatch,
         transaction_execution::TransactionStatusSender,
-        vote_sender_types::{ReplayVoteSendType, ReplayVoteSender},
     },
     solana_runtime_transaction::transaction_with_meta::TransactionWithMeta,
     solana_svm::{
@@ -27,7 +25,7 @@ pub enum CommitTransactionDetails {
     Committed {
         compute_units: u64,
         loaded_accounts_data_size: u32,
-        fee_payer_post_balance: u64,
+        fee_payer_post_balance: Option<u64>,
         result: Result<(), TransactionError>,
     },
     NotCommitted(TransactionError),
@@ -36,19 +34,16 @@ pub enum CommitTransactionDetails {
 #[derive(Clone)]
 pub struct Committer {
     transaction_status_sender: Option<TransactionStatusSender>,
-    replay_vote_sender: ReplayVoteSender,
     prioritization_fee_cache: Option<Arc<PrioritizationFeeCache>>,
 }
 
 impl Committer {
     pub fn new(
         transaction_status_sender: Option<TransactionStatusSender>,
-        replay_vote_sender: ReplayVoteSender,
         prioritization_fee_cache: Option<Arc<PrioritizationFeeCache>>,
     ) -> Self {
         Self {
             transaction_status_sender,
-            replay_vote_sender,
             prioritization_fee_cache,
         }
     }
@@ -75,32 +70,9 @@ impl Committer {
         ));
         execute_and_commit_timings.commit_us = commit_time_us;
 
-        let commit_transaction_statuses = commit_results
-            .iter()
-            .map(|commit_result| match commit_result {
-                // reports actual execution CUs, and actual loaded accounts size for
-                // transaction committed to block. qos_service uses these information to adjust
-                // reserved block space.
-                Ok(committed_tx) => CommitTransactionDetails::Committed {
-                    compute_units: committed_tx.executed_units,
-                    loaded_accounts_data_size: committed_tx
-                        .loaded_account_stats
-                        .loaded_accounts_data_size,
-                    result: committed_tx.status.clone(),
-                    fee_payer_post_balance: committed_tx.fee_payer_post_balance,
-                },
-                Err(err) => CommitTransactionDetails::NotCommitted(err.clone()),
-            })
-            .collect();
+        let commit_transaction_statuses = Self::transaction_details(&commit_results);
 
-        let ((), find_and_send_votes_us) = measure_us!({
-            bank_utils::find_and_send_votes(
-                batch.sanitized_transactions(),
-                &commit_results,
-                Some(&self.replay_vote_sender),
-                ReplayVoteSendType::VerifiedExecuted,
-            );
-
+        let ((), post_commit_us) = measure_us!({
             if let Some(prioritization_fee_cache) = self.prioritization_fee_cache.as_ref() {
                 let fee_paying_transactions = commit_results
                     .iter()
@@ -117,8 +89,28 @@ impl Committer {
                 starting_transaction_index,
             );
         });
-        execute_and_commit_timings.find_and_send_votes_us = find_and_send_votes_us;
+        execute_and_commit_timings.post_commit_us = post_commit_us;
         (commit_time_us, commit_transaction_statuses)
+    }
+
+    pub(super) fn transaction_details(
+        commit_results: &[TransactionCommitResult],
+    ) -> Vec<CommitTransactionDetails> {
+        commit_results
+            .iter()
+            .map(|commit_result| match commit_result {
+                // Report actual execution CUs and loaded account size to the scheduler.
+                Ok(committed_tx) => CommitTransactionDetails::Committed {
+                    compute_units: committed_tx.executed_units,
+                    loaded_accounts_data_size: committed_tx
+                        .loaded_account_stats
+                        .loaded_accounts_data_size,
+                    result: committed_tx.status.clone(),
+                    fee_payer_post_balance: committed_tx.fee_payer_post_balance,
+                },
+                Err(err) => CommitTransactionDetails::NotCommitted(err.clone()),
+            })
+            .collect()
     }
 
     fn collect_balances_and_send_status_batch(

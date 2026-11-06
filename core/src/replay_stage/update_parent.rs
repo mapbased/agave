@@ -2,17 +2,14 @@
 
 use {
     super::{
-        ProcessActiveBanksContext, ReplayStage, TowerBFTStructures,
+        ProcessActiveBanksContext, ReplayStage, ReplayStageError,
         dead_slots::{
             DeadSlotLogLevel, DeadSlotNotifications, mark_hard_dead_slot,
-            mark_hard_dead_slot_notifications, send_invalid_bank,
+            mark_hard_dead_slot_notifications,
         },
     },
-    crate::{
-        consensus::progress_map::{DeadSlotReason, ProgressMap},
-        repair::cluster_slot_state_verifier::{DuplicateSlotsToRepair, PurgeRepairSlotCounter},
-    },
-    agave_votor_messages::migration::MigrationStatus,
+    crate::consensus::progress_map::{DeadSlotReason, ProgressMap},
+    agave_votor_messages::consensus_message::BlockId,
     solana_clock::Slot,
     solana_entry::block_component::VersionedUpdateParent,
     solana_ledger::{
@@ -24,8 +21,12 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_runtime::{
-        bank::Bank, bank_forks::BankForks, leader_schedule_utils::leader_slot_index,
-        vote_sender_types::ReplayVoteSender,
+        bank::Bank,
+        bank_forks::BankForks,
+        leader_schedule_utils::leader_slot_index,
+        transaction_execution::{
+            TransactionHistoryPurgeInput, TransactionHistoryPurgeSource, TransactionStatusSender,
+        },
     },
     std::sync::{Arc, RwLock},
 };
@@ -58,12 +59,7 @@ pub(super) fn child_bank_replay_start(
     parent_bank: &Bank,
     parent_slot: Slot,
     child_slot: Slot,
-    migration_status: &MigrationStatus,
 ) -> ChildBankReplayStart {
-    if !migration_status.should_allow_block_markers(child_slot) {
-        return ChildBankReplayStart::FromStart;
-    }
-
     let Some(slot_meta) = blockstore
         .meta(child_slot)
         .expect("Blockstore should not fail")
@@ -79,7 +75,8 @@ pub(super) fn child_bank_replay_start(
     }
 
     // Genesis doesn't have a block id.
-    if parent_slot != 0 && Some(slot_meta.parent_block_id) != parent_bank.block_id() {
+    if parent_slot != 0 && parent_bank.block_id() != Some(BlockId::from(slot_meta.parent_block_id))
+    {
         // There were duplicate blocks in this slot and we have the wrong one
         // replayed. Do not continue down this fork. If this fork ends up
         // being ParentReady, votor will repair the duplicate parent block and
@@ -120,24 +117,20 @@ fn try_restart_slot_from_update_parent(
     progress: &mut ProgressMap,
     async_verification_freelist: &mut Vec<AsyncVerificationProgress>,
     slot: Slot,
-    replay_vote_sender: &ReplayVoteSender,
-    migration_status: &MigrationStatus,
-    source: &str,
+    source: TransactionHistoryPurgeSource,
     entry_notification_sender: Option<&EntryNotifierSender>,
-) -> bool {
-    if !migration_status.should_allow_block_markers(slot) {
-        return false;
-    }
+    transaction_status_sender: Option<&TransactionStatusSender>,
+) -> Result<bool, ReplayStageError> {
     if blockstore.is_dead(slot) {
-        return false;
+        return Ok(false);
     }
     let Some(slot_meta) = blockstore.meta(slot).expect("Blockstore should not fail") else {
-        return false;
+        return Ok(false);
     };
     let Some(replay_fec_set_index) =
         update_parent_replay_offset(slot, &slot_meta, bank_forks.read().unwrap().root())
     else {
-        return false;
+        return Ok(false);
     };
 
     // Skip if neither replay bank nor progress exists. If progress exists
@@ -145,13 +138,13 @@ fn try_restart_slot_from_update_parent(
     // can recreate the bank from the updated SlotMeta.
     let bank = bank_forks.read().unwrap().get(slot);
     if bank.is_none() && !progress.contains_key(&slot) {
-        return false;
+        return Ok(false);
     }
     if bank.as_ref().is_some_and(|bank| {
         !bank.should_replay_from_blockstore()
             || !bank.feature_set.snapshot().alpenglow_fast_leader_handover
     }) {
-        return false;
+        return Ok(false);
     }
     let dead_reason = progress
         .get(&slot)
@@ -163,7 +156,7 @@ fn try_restart_slot_from_update_parent(
                 | DeadSlotReason::ReplayFailureAtUpdateParent(_)
         )
     }) {
-        return false;
+        return Ok(false);
     }
 
     // Check if we've already replayed past the UpdateParent marker.
@@ -180,19 +173,29 @@ fn try_restart_slot_from_update_parent(
     if current_num_shreds > replay_fec_set_index
         || (current_num_shreds == replay_fec_set_index && !failed_at_replay_fec_set_index)
     {
-        return false;
+        return Ok(false);
     }
 
     // Clear and let generate_new_bank_forks restart from replay_fec_set_index.
     info!(
         "{my_pubkey}: restarting slot {slot} from replay_fec_set_index {replay_fec_set_index} via \
-         {source} (was at {current_num_shreds} shreds)",
+         {} (was at {current_num_shreds} shreds)",
+        source.as_str(),
     );
-    let cleared_bank_id = bank.map(|bank| {
-        send_invalid_bank(&bank, replay_vote_sender);
-        bank.bank_id()
-    });
-    ReplayStage::clear_slots([slot], bank_forks, progress, async_verification_freelist);
+    let cleared_bank_id = bank.map(|bank| bank.bank_id());
+    ReplayStage::clear_slots(
+        [slot],
+        bank_forks,
+        progress,
+        async_verification_freelist,
+        transaction_status_sender.map(|transaction_status_sender| {
+            (
+                transaction_status_sender,
+                source,
+                TransactionHistoryPurgeInput::ReplayStage,
+            )
+        }),
+    )?;
     if let Some(cleared_bank_id) = cleared_bank_id {
         let update_parent = UpdateParentInfo::from_slot_meta(slot, &slot_meta)
             .expect("UpdateParent metadata must include a parent slot");
@@ -202,11 +205,11 @@ fn try_restart_slot_from_update_parent(
                 slot,
                 cleared_bank_id,
                 parent_slot: update_parent.parent_slot,
-                parent_block_id: update_parent.parent_block_id,
+                parent_block_id: BlockId::from(update_parent.parent_block_id),
             },
         );
     }
-    true
+    Ok(true)
 }
 
 /// Revisit soft-dead slots as more shreds arrive.
@@ -223,10 +226,9 @@ pub(super) fn process_soft_dead_slots(
     slot_status_notifier: &Option<solana_rpc::slot_status_notifier::SlotStatusNotifier>,
     progress: &mut ProgressMap,
     async_verification_freelist: &mut Vec<AsyncVerificationProgress>,
-    replay_vote_sender: &ReplayVoteSender,
-    migration_status: &MigrationStatus,
     entry_notification_sender: Option<&EntryNotifierSender>,
-) {
+    transaction_status_sender: Option<&TransactionStatusSender>,
+) -> Result<(), ReplayStageError> {
     let soft_dead_slots = progress
         .iter()
         .filter_map(|(&slot, progress)| {
@@ -263,11 +265,10 @@ pub(super) fn process_soft_dead_slots(
                 progress,
                 async_verification_freelist,
                 slot,
-                replay_vote_sender,
-                migration_status,
-                "soft-dead scan",
+                TransactionHistoryPurgeSource::SoftDeadSlot,
                 entry_notification_sender,
-            );
+                transaction_status_sender,
+            )?;
             continue;
         }
 
@@ -293,17 +294,18 @@ pub(super) fn process_soft_dead_slots(
                     blockstore: blockstore.clone(),
                     rpc_subscriptions: rpc_subscriptions.clone(),
                     slot_status_notifier: slot_status_notifier.clone(),
-                    replay_vote_sender: replay_vote_sender.clone(),
                 };
                 mark_hard_dead_slot_notifications(&bank, err, log_level, progress, &notifications);
             }
         }
     }
+    Ok(())
 }
 
 /// Handles UpdateParent signals by clearing slot state so replay restarts from
 /// the new parent. Skips live own-leader banks, slots replay has not started,
 /// and slots that already replayed past the UpdateParent marker.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_update_parent_interrupts(
     my_pubkey: &Pubkey,
     blockstore: &Blockstore,
@@ -311,10 +313,9 @@ pub(super) fn handle_update_parent_interrupts(
     progress: &mut ProgressMap,
     async_verification_freelist: &mut Vec<AsyncVerificationProgress>,
     update_parent_receiver: &UpdateParentReceiver,
-    replay_vote_sender: &ReplayVoteSender,
-    migration_status: &MigrationStatus,
     entry_notification_sender: Option<&EntryNotifierSender>,
-) {
+    transaction_status_sender: Option<&TransactionStatusSender>,
+) -> Result<(), ReplayStageError> {
     while let Ok(signal) = update_parent_receiver.try_recv() {
         try_restart_slot_from_update_parent(
             my_pubkey,
@@ -323,12 +324,12 @@ pub(super) fn handle_update_parent_interrupts(
             progress,
             async_verification_freelist,
             signal.slot,
-            replay_vote_sender,
-            migration_status,
-            "UpdateParent signal",
+            TransactionHistoryPurgeSource::UpdateParentSignal,
             entry_notification_sender,
-        );
+            transaction_status_sender,
+        )?;
     }
+    Ok(())
 }
 
 /// Restart an obsolete optimistic-parent bank after replay reaches the
@@ -342,10 +343,7 @@ pub(super) fn handle_abandoned_bank(
     bank_forks: &RwLock<BankForks>,
     progress: &mut ProgressMap,
     async_verification_freelist: &mut Vec<AsyncVerificationProgress>,
-    duplicate_slots_to_repair: &mut DuplicateSlotsToRepair,
-    purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
-    tbft_structs: Option<&mut TowerBFTStructures>,
-) {
+) -> Result<(), ReplayStageError> {
     bank.clear_accounts_lt_hash_async_progress_is_at_end();
     // Handle UpdateParent marker during fast leader handover. The leader
     // built on an optimistic parent that didn't match the ParentReady event.
@@ -387,22 +385,16 @@ pub(super) fn handle_abandoned_bank(
                 .is_some()
             });
     if !update_parent_ready {
-        let mut dead_slot_context = process_active_banks_context.dead_slot_context(
-            duplicate_slots_to_repair,
-            purge_repair_slot_counter,
-            tbft_structs,
-        );
+        let dead_slot_context = process_active_banks_context.dead_slot_context();
         mark_hard_dead_slot(
             bank,
             "error: replay abandoned bank for an unusable UpdateParent".to_string(),
             DeadSlotLogLevel::Error,
             progress,
-            &mut dead_slot_context,
+            &dead_slot_context,
         );
-        return;
+        return Ok(());
     }
-
-    send_invalid_bank(bank, &process_active_banks_context.replay_vote_sender);
 
     // Clear the bank from bank_forks. It will be recreated with the correct
     // parent by generate_new_bank_forks on the next iteration.
@@ -411,7 +403,18 @@ pub(super) fn handle_abandoned_bank(
         bank_forks,
         progress,
         async_verification_freelist,
-    );
+        process_active_banks_context
+            .transaction_status_sender
+            .as_ref()
+            .map(|transaction_status_sender| {
+                (
+                    transaction_status_sender,
+                    TransactionHistoryPurgeSource::AbandonedBank,
+                    TransactionHistoryPurgeInput::ReplayStage,
+                )
+            }),
+    )?;
+
     notify_entry_update_parent(
         process_active_banks_context
             .entry_notification_sender
@@ -423,4 +426,5 @@ pub(super) fn handle_abandoned_bank(
             parent_block_id: new_parent_block_id,
         },
     );
+    Ok(())
 }

@@ -3,10 +3,10 @@ use {
         poh_recorder::{PohRecorderError, Record},
         record_channels::{RecordSender, RecordSenderError},
     },
-    solana_clock::BankId,
     solana_entry::entry::hash_transactions,
     solana_hash::Hash,
     solana_measure::measure_us,
+    solana_runtime::bank::BankId,
     solana_transaction::versioned::VersionedTransaction,
     std::num::Saturating,
 };
@@ -35,7 +35,7 @@ pub struct RecordTransactionsSummary {
     pub starting_transaction_index: Option<usize>,
 }
 
-/// Adds transactions into the PoH stream, by sending them to the PoH service.
+/// Adds transactions into the PoH stream by sending them to the block creation loop.
 #[derive(Clone, Debug)]
 pub struct TransactionRecorder {
     // shared by all users of PohRecorder
@@ -47,7 +47,8 @@ impl TransactionRecorder {
         Self { record_sender }
     }
 
-    /// Hashes `transactions` and sends to PoH service for recording. Waits for response up to 1s.
+    /// Hashes `transactions` and sends them to the block creation loop for recording. Waits for
+    /// response up to 1s.
     /// Panics on unexpected (non-`MaxHeightReached`) errors.
     pub fn record_transactions(
         &self,

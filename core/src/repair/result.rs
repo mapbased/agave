@@ -17,6 +17,12 @@ pub enum RepairVerifyError {
     TimeSkew,
     #[error("Unsigned")]
     Unsigned,
+    #[error("Unsupported")]
+    Unsupported,
+    #[error("UnmatchedPong")]
+    UnmatchedPong,
+    #[error("PongBudgetExhausted")]
+    PongBudgetExhausted,
 }
 
 #[derive(Debug, Error)]
