@@ -81,6 +81,7 @@ pub struct FeatureSnapshot {
     pub relax_fee_payer_constraint: bool,
     pub remove_inactive_stakes: bool,
     pub loader_v3_set_program_data_to_elf_length: bool,
+    pub loaderv3_programdata_size_floor: bool,
 }
 
 impl From<&AHashMap<Pubkey, u64>> for FeatureSnapshot {
@@ -183,6 +184,7 @@ impl From<&AHashMap<Pubkey, u64>> for FeatureSnapshot {
             loader_v3_set_program_data_to_elf_length: is_active(
                 &loader_v3_set_program_data_to_elf_length::ID,
             ),
+            loaderv3_programdata_size_floor: is_active(&loaderv3_programdata_size_floor::ID),
         }
     }
 }
@@ -344,6 +346,7 @@ impl FeatureSet {
             relax_fee_payer_constraint: snapshot.relax_fee_payer_constraint,
             loader_v3_set_program_data_to_elf_length: snapshot
                 .loader_v3_set_program_data_to_elf_length,
+            loaderv3_programdata_size_floor: snapshot.loaderv3_programdata_size_floor,
         }
     }
 }
@@ -1442,7 +1445,7 @@ pub mod limit_instruction_accounts {
 }
 
 pub mod block_revenue_sharing {
-    solana_pubkey::declare_id!("DSroRTaL5zozFw5yRYpaCTjeND1mSxxsnAeSi5vhELUv");
+    solana_pubkey::declare_id!("Crbnc267wkJvFhYakqwWWX57sx5bkrftJLekzy6yWKLT");
 }
 
 pub mod vote_account_initialize_v2 {
@@ -1528,7 +1531,7 @@ pub mod relax_fee_payer_constraint {
 }
 
 pub mod double_disinflation_rate {
-    solana_pubkey::declare_id!("55oikhjJ2LUi1xdgJ17ueRyHFURZEw32asT3iAKfh7gg");
+    solana_pubkey::declare_id!("ddibiks7RHZR69QXYMCmk4EZNt6WckspTqEEWv6cS38");
     /// Taper (yearly disinflation rate) applied from activation onward.
     pub const TAPER: f64 = 0.30;
 }
@@ -1539,6 +1542,10 @@ pub mod remove_inactive_stakes {
 
 pub mod loader_v3_set_program_data_to_elf_length {
     solana_pubkey::declare_id!("EhisBfVtGvEA8bVCVN5VMaYEaX6iTfoUrmcDi8LY7Kxy");
+}
+
+pub mod loaderv3_programdata_size_floor {
+    solana_pubkey::declare_id!("8whkDenELnfwYLirBc4Wb4H2Z1z5K7tiykpdxJS7cWg1");
 }
 
 pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::new(|| {
@@ -2634,6 +2641,10 @@ pub static FEATURE_NAMES: LazyLock<AHashMap<Pubkey, &'static str>> = LazyLock::n
         (
             loader_v3_set_program_data_to_elf_length::id(),
             "SIMD-0433: Loader V3 Set Program Data to ELF Length",
+        ),
+        (
+            loaderv3_programdata_size_floor::id(),
+            "Apply a minimum loaded data size to loader-v3 ProgramData accounts",
         ),
         /*************** ADD NEW FEATURES HERE ***************/
         /***** ADD NEW FEATURE BOOL TO `FeatureSnapshot` *****/
