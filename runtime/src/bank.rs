@@ -2365,7 +2365,7 @@ impl Bank {
             accounts_data_len: self.load_accounts_data_size(),
             versioned_epoch_stakes: self.epoch_stakes.clone(),
             accounts_lt_hash: self.accounts_lt_hash.lock().unwrap().clone(),
-            block_id: self.block_id().unwrap_or_else(|| self.hash()),
+            block_id: self.block_id().unwrap_or_else(|| self.hash().into()),
         }
     }
 
@@ -3272,6 +3272,10 @@ impl Bank {
             // that rehash() can be called and *not* modify self.accounts_lt_hash.
             self.finish_accounts_lt_hash_updates();
             *hash = self.hash_internal_state();
+            self.rc
+                .accounts
+                .accounts_db
+                .mark_slot_frozen(self.slot());
             self.rc
                 .accounts
                 .accounts_db

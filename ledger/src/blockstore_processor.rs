@@ -1,5 +1,4 @@
-use qualifier_attr::qualifiers;
-#[cfg(any(test, feature = "dev-context-only-utils"))]
+#[cfg(feature = "dev-context-only-utils")]
 use solana_entry::entry::{Entry, entry_views_for_tests};
 use {
     crate::{
@@ -166,10 +165,20 @@ pub fn process_entries_for_tests(
     result.and(wait_result)
 }
 
-#[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
-fn schedule_entries_for_tests(
+#[cfg(feature = "dev-context-only-utils")]
+pub fn schedule_entries_for_tests(
     bank: &BankWithScheduler,
     entries: Vec<Entry>,
+) -> result::Result<(), BlockstoreProcessorError> {
+    let mut starting_index = bank.transaction_count().try_into().unwrap();
+    let entries = entry_views_for_tests(entries);
+    schedule_entries(bank, entries, &mut starting_index)
+}
+
+pub fn schedule_entries(
+    bank: &BankWithScheduler,
+    entries: Vec<EntryView<Bytes>>,
+    starting_index: &mut usize,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let validate_and_hash_transaction = {
         let bank = bank.clone_with_scheduler();
@@ -190,19 +199,23 @@ fn schedule_entries_for_tests(
     )?;
     // unverified_signatures.verify()?; // SKIPPED for fast replay
 
-    let mut entry_starting_index: usize = bank.transaction_count().try_into().unwrap();
-    let replay_entries = entries.into_iter().map(|entry| {
-        let starting_index = entry_starting_index;
-        if let EntryType::Transactions(ref transactions) = entry {
-            entry_starting_index = entry_starting_index.saturating_add(transactions.len());
-        }
-        Ok(ReplayEntry {
-            entry,
-            starting_index,
+    let mut entry_starting_index: usize = *starting_index;
+    let replay_entries: Vec<_> = entries
+        .into_iter()
+        .map(|entry| {
+            let cur_starting_index = entry_starting_index;
+            if let EntryType::Transactions(ref transactions) = entry {
+                entry_starting_index = entry_starting_index.saturating_add(transactions.len());
+            }
+            ReplayEntry {
+                entry,
+                starting_index: cur_starting_index,
+            }
         })
-    });
+        .collect();
+    *starting_index = entry_starting_index;
 
-    if let Some(hash) = schedule_entries(bank, replay_entries)? {
+    if let Some(hash) = schedule_replay_entries(bank, replay_entries.into_iter().map(Ok))? {
         bank.register_tick(&hash);
     }
     Ok(())
@@ -213,7 +226,7 @@ fn schedule_entries_for_tests(
 // Returns the hash of the last tick if a block boundary is reached (the alpentick). The caller must
 // call `bank.register_tick(hash)` with it. We avoid registering it here to allow the caller to
 // queue more async work, as register_tick(alpentick) will drain the scheduler.
-fn schedule_entries(
+fn schedule_replay_entries(
     bank: &BankWithScheduler,
     entries: impl IntoIterator<Item = result::Result<ReplayEntry, BlockstoreProcessorError>>,
 ) -> result::Result<Option<Hash>, BlockstoreProcessorError> {
@@ -1657,7 +1670,7 @@ fn confirm_slot_entries(
                 })
             });
 
-    let schedule_result = schedule_entries(bank, replay_entries);
+    let schedule_result = schedule_replay_entries(bank, replay_entries);
     replay_timer.stop();
     *replay_elapsed += replay_timer.as_us();
 
@@ -5433,7 +5446,7 @@ pub mod tests {
             starting_index: 0,
         };
 
-        let result = schedule_entries(&bank, std::iter::once(Ok(replay_entry)));
+        let result = schedule_replay_entries(&bank, std::iter::once(Ok(replay_entry)));
         if should_succeed {
             assert_matches!(result, Ok(None));
         } else {

@@ -3265,9 +3265,12 @@ impl AccountsDb {
         if let Some(slot_cache) = self.accounts_cache.bank_cache(bank_id) {
             slot_cache.mark_slot_frozen();
             slot_cache.report_slot_store_metrics();
+            self.mark_slot_frozen(slot_cache.slot());
         }
         self.accounts_cache.report_size();
+    }
 
+    pub fn mark_slot_frozen(&self, slot: Slot) {
         let cache:&solana_accounts_in_memory::slot_cache::SlotCache = &self.locator.slot_caches[(slot % (solana_accounts_in_memory::locator::LOCATOR_BITSET_SIZE as u64)) as usize];
         if cache.slot.load(Ordering::Acquire) == slot {
             cache.mark_frozen();
@@ -4360,6 +4363,7 @@ impl AccountsDb {
     pub(crate) fn _store_accounts_unfrozen<'a>(
         &self,
         accounts: impl StorableAccounts<'a>,
+        bank_id: BankId,
         ancestors: &Ancestors,
     ) {
         // If all transactions in a batch are errored,
@@ -4952,18 +4956,6 @@ impl AccountsDb {
 
         if let Some(slot) = slot {
             self.add_root_slot(slot);
-        }
-
-        AccountsAddRootTiming {
-            cache_us: cache_time.as_us(),
-        }
-    }
-        let mut cache_time = Measure::start("cache_add_root");
-        let slot = self.accounts_cache.add_root(bank_id);
-        cache_time.stop();
-
-        if let Some(slot) = slot {
-            self.max_root.fetch_max(slot, Ordering::Relaxed);
         }
 
         AccountsAddRootTiming {

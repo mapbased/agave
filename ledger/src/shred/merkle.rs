@@ -810,7 +810,6 @@ fn get_reference_headers(shreds: &[Shred]) -> Result<ReferenceHeaders, Error> {
     })
 }
 
-#[cfg(test)]
 pub(super) fn rebuild_erasure_batch(
     shreds: Vec<Shred>,
     must_match_signatures: bool,

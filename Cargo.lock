@@ -9609,6 +9609,7 @@ dependencies = [
  "agave-reserved-account-keys 5.0.0-alpha.0",
  "agave-snapshots",
  "agave-transaction-view 10.1.0",
+ "agave-votor-messages",
  "ahash 0.8.12",
  "anyhow",
  "arc-swap",

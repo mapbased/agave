@@ -989,11 +989,11 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "art"
-version = "4.4.0-alpha.5"
+version = "5.0.0-alpha.0"
 dependencies = [
  "libc",
  "modular-bitfield",
- "parking_lot 0.12.5",
+ "parking_lot 0.13.0",
  "rand 0.9.4",
  "windows-sys 0.42.0",
 ]
@@ -6004,7 +6004,7 @@ dependencies = [
 
 [[package]]
 name = "solana-accounts-in-memory"
-version = "4.4.0-alpha.5"
+version = "5.0.0-alpha.0"
 dependencies = [
  "art",
  "blake3",
@@ -6016,10 +6016,10 @@ dependencies = [
  "rayon",
  "smallvec",
  "solana-account",
- "solana-clock 4.0.0",
+ "solana-clock",
  "solana-epoch-schedule",
  "solana-lattice-hash",
- "solana-pubkey 4.3.0",
+ "solana-pubkey 4.4.0",
  "solana-sdk-ids",
 ]
 
