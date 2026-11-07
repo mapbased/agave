@@ -9617,6 +9617,7 @@ dependencies = [
  "art",
  "async-channel 2.3.1",
  "axum 0.8.9",
+ "base64 0.23.1",
  "bincode",
  "blake3",
  "bs58 0.5.1",
