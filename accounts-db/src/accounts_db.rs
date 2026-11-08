@@ -2694,13 +2694,14 @@ impl AccountsDb {
         None
     }
 
-    pub fn prefetch(&self, pubkey: &Pubkey,slot:Slot){
-
-        self.load_fromdb(pubkey,slot,PopulateReadCache::True);
-         // 从
+    pub fn prefetch(&self, pubkey: &Pubkey, slot: Slot) {
+        if self.locator.map.contains_key(pubkey) {
+            return;
+        }
+        self.load_fromdb(pubkey, slot, PopulateReadCache::True);
     }
 
-    fn load_fromdb(&self, pubkey: &Pubkey,     current_slot:Slot, populate_read_cache: PopulateReadCache,)->Option<(AccountSharedData, Slot)>{
+    fn load_fromdb(&self, pubkey: &Pubkey, current_slot: Slot, populate_read_cache: PopulateReadCache) -> Option<(AccountSharedData, Slot)> {
         let account = self.in_memory_db.load_pubkey(pubkey)?;
 
         let account_shared_data = solana_account::AccountSharedData::from(account);
@@ -2712,9 +2713,9 @@ impl AccountsDb {
             if cache.slot.load(Ordering::Acquire) == current_slot {
                 let ebr = self.in_memory_db.ebr.enter();
                 let account_index = self.in_memory_db.get_or_register_id(pubkey, &ebr);
-                let arc_bitset = self.locator.insert(pubkey, current_slot, account_index);
+                let arc_bitset = self.locator.get_or_insert_bitset(pubkey, account_index);
                 let arc_account = std::sync::Arc::new(account_shared_data.clone());
-                if !cache.try_cache(
+                if cache.try_cache(
                     account_index,
                     AccountBag {
                         account: arc_account,
@@ -2723,12 +2724,7 @@ impl AccountsDb {
                     },
                     current_slot,
                 ) {
-                    // Only clear the locator bit if the slot was actually purged/recycled.
-                    // Don't clear if try_cache failed because a concurrent write() already
-                    // inserted the account — the bit must remain set for find_in_caches.
-                    if cache.slot.load(Ordering::Acquire) != current_slot {
-                        arc_bitset.clear_bit(current_slot, Ordering::AcqRel);
-                    }
+                    arc_bitset.set_bit(current_slot, Ordering::AcqRel);
                 }
             }
         }
@@ -4241,6 +4237,7 @@ impl AccountsDb {
                         ).is_ok() {
                             let flushed_slot = cache.slot.load(Ordering::Acquire);
                             if flushed_slot != 0 {
+                                let _guard = self.locator.flush_lock.lock().unwrap();
                                 self.locator.flush_slot(flushed_slot, cache);
                             }
                             cache.clear_for_reuse(&self.locator);
@@ -4325,7 +4322,7 @@ impl AccountsDb {
                 let pubkey = *account.pubkey();
                 let owner = *account.owner();
                 let account_index = self.in_memory_db.get_or_register_id(&pubkey, &ebr);
-                let bitset = self.locator.insert(&pubkey, target_slot, account_index);
+                let bitset = self.locator.get_or_insert_bitset(&pubkey, account_index);
                 let arc_account = std::sync::Arc::new(account.take_account());
                 let written = cache.write(
                     account_index,
@@ -4337,13 +4334,12 @@ impl AccountsDb {
                     target_slot,
                 );
                 if written {
+                    bitset.set_bit(target_slot, Ordering::AcqRel);
                     // Defer the MEV notification to the single batched call below (skip Vote accounts).
                     const VOTE_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("Vote111111111111111111111111111111111111111");
                     if owner != VOTE_PROGRAM_ID {
                         mev_batch.push((pubkey, owner, arc_account, account_index as u64));
                     }
-                } else {
-                    bitset.clear_bit(target_slot, Ordering::AcqRel);
                 }
             });
         }
