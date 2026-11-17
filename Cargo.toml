@@ -135,6 +135,7 @@ members = [
     "runner",
     "mev-api",
     "mev-plugins/mev-ng",
+    "mev-plugins/mev-v3",
     "mev-plugins/mev-arb",  "mev-plugins/mev-arb-proxy", "mev-plugins/mev-alt", "mev-plugins/mev-stat", "mev-plugins/mev-open",
     "mev-plugins/arbitrage/arb-bot",
     "mev-plugins/arbitrage/dex",
