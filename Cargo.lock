@@ -7155,6 +7155,7 @@ dependencies = [
  "log",
  "mev-api",
  "mev-arb-proxy",
+ "mev-ng",
  "parking_lot 0.13.0",
  "pinocchio 0.11.2",
  "proptest",
