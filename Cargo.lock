@@ -7146,6 +7146,7 @@ dependencies = [
 name = "mev-v3"
 version = "0.1.0"
 dependencies = [
+ "ahash 0.8.12",
  "arc-swap",
  "art",
  "bincode",
